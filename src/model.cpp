@@ -22,8 +22,8 @@ void Config::from_yalm(YALMData& yalm, int context) {
   n_kv_heads = std::stoi(yalm.metadata.at("n_kv_heads").get<std::string>());
   vocab_size = std::stoi(yalm.metadata.at("vocab_size").get<std::string>());
   // mixture of experts
-  n_experts = yalm.metadata.contains("n_experts") ? std::stoi(yalm.metadata.at("n_experts").get<std::string>()) : 0;
-  n_experts_active = yalm.metadata.contains("n_experts_active") ? std::stoi(yalm.metadata.at("n_experts_active").get<std::string>()) : 0;
+  n_routed_experts = yalm.metadata.contains("n_routed_experts") ? std::stoi(yalm.metadata.at("n_routed_experts").get<std::string>()) : 0;
+  n_active_routed = yalm.metadata.contains("n_active_routed") ? std::stoi(yalm.metadata.at("n_active_routed").get<std::string>()) : 0;
 
   // for now limit seq_len to 4096 to avoid KV cache OOM for models like Mistral since window size isn't correctly specified
   max_seq_len = std::min(std::stoi(yalm.metadata.at("max_seq_len").get<std::string>()), 4096);
@@ -76,9 +76,9 @@ size_t Config::active_bytes(size_t pos) const {
   bytes_per_block += n_heads * head_dim * dim * weight_size; // wq
   bytes_per_block += 2 * n_kv_heads * head_dim * dim * weight_size; // wk, wv
   bytes_per_block += n_heads * head_dim * dim * weight_size; // wo
-  if (n_experts > 0) {
-    bytes_per_block += n_experts * dim * weight_size; // moegate
-    bytes_per_block += n_experts_active * 3 * dim * hidden_dim * weight_size; // w1, w2, w3
+  if (n_routed_experts > 0) {
+    bytes_per_block += n_routed_experts * dim * weight_size; // moegate
+    bytes_per_block += n_active_routed * 3 * dim * hidden_dim * weight_size; // w1, w2, w3
   } else {
     bytes_per_block += 3 * dim * hidden_dim * weight_size; // w1, w2, w3
   }
@@ -173,18 +173,18 @@ Block::Block(
     wo, config->weight_dtype, {config->dim, config->n_heads * config->head_dim, 0, 0}
   );
 
-  if (config->n_experts > 0) {
+  if (config->n_routed_experts > 0) {
     _moegate = check_tensor(
-      moegate, config->weight_dtype, {config->n_experts, config->dim, 0, 0}
+      moegate, config->weight_dtype, {config->n_routed_experts, config->dim, 0, 0}
     );
     _w1 = check_tensor(
-      w1, config->weight_dtype, {config->n_experts, config->hidden_dim, config->dim, 0}
+      w1, config->weight_dtype, {config->n_routed_experts, config->hidden_dim, config->dim, 0}
     );
     _w2 = check_tensor(
-      w2, config->weight_dtype, {config->n_experts, config->dim, config->hidden_dim, 0}
+      w2, config->weight_dtype, {config->n_routed_experts, config->dim, config->hidden_dim, 0}
     );
     _w3 = check_tensor(
-      w3, config->weight_dtype, {config->n_experts, config->hidden_dim, config->dim, 0}
+      w3, config->weight_dtype, {config->n_routed_experts, config->hidden_dim, config->dim, 0}
     );
   } else {
     _w1 = check_tensor(
@@ -294,10 +294,10 @@ InferenceState::InferenceState(const std::shared_ptr<Config> config):
   _v = new float[config->n_kv_heads * config->head_dim]();
   _att = new float[config->n_heads * config->max_seq_len]();
   _logits = new float[config->vocab_size]();
-  if (config->n_experts > 0) {
-    _moe_weights = new float[config->n_experts]();
-    _active_experts = new int[config->n_experts_active]();
-    _active_experts_weights = new float[config->n_experts_active]();
+  if (config->n_routed_experts > 0) {
+    _moe_weights = new float[config->n_routed_experts]();
+    _active_experts = new int[config->n_active_routed]();
+    _active_experts_weights = new float[config->n_active_routed]();
   }
 }
 
@@ -355,9 +355,9 @@ void InferenceState::cuda() {
   _att = static_cast<float*>(upload_cuda(_att, _config->n_heads * _config->max_seq_len * sizeof(float)));
   register_cuda_host(_logits, _config->vocab_size * sizeof(float));
   if (_moe_weights != nullptr) {
-    _moe_weights = static_cast<float*>(upload_cuda(_moe_weights, _config->n_experts * sizeof(float)));
-    _active_experts = static_cast<int*>(upload_cuda(_active_experts, _config->n_experts_active * sizeof(int)));
-    _active_experts_weights = static_cast<float*>(upload_cuda(_active_experts_weights, _config->n_experts_active * sizeof(float)));
+    _moe_weights = static_cast<float*>(upload_cuda(_moe_weights, _config->n_routed_experts * sizeof(float)));
+    _active_experts = static_cast<int*>(upload_cuda(_active_experts, _config->n_active_routed * sizeof(int)));
+    _active_experts_weights = static_cast<float*>(upload_cuda(_active_experts_weights, _config->n_active_routed * sizeof(float)));
   }
 }
 
@@ -385,7 +385,7 @@ Model::Model(YALMData& yalm, int context) {
       get_tensor(yalm, fmt::format("model.layers.{}.mlp.w1.weight", i)),
       get_tensor(yalm, fmt::format("model.layers.{}.mlp.w2.weight", i)),
       get_tensor(yalm, fmt::format("model.layers.{}.mlp.w3.weight", i)),
-      config->n_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.weight", i)) : nullptr
+      config->n_routed_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.weight", i)) : nullptr
     ));
   }
 

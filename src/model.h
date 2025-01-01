@@ -54,8 +54,8 @@ struct Config {
   LayerNormType norm_type;  // norm type
   float qkv_clip;           // clip qkv values to [-clip, clip]
   // mixture of experts
-  int n_experts;
-  int n_experts_active;
+  int n_routed_experts;
+  int n_active_routed;
 
   // Data type of the weights according to config, used
   // to safety check tensor dtype at initialization time.
@@ -135,7 +135,7 @@ private:
   float* _v = nullptr;         // (n_kv_heads * head_dim,) - value vectors for latest timestamp
   float* _att = nullptr;       // (n_heads, seq_len) - buffer for attention scores
   // mixture of experts
-  float* _moe_weights = nullptr; // (n_experts,) - buffer for expert weights, decided by router
+  float* _moe_weights = nullptr; // (n_routed_experts,) - buffer for expert weights, decided by router
   float* _active_experts_weights = nullptr; // (n_active_experts,) - buffer for weights of top K experts (active experts)
   int* _active_experts = nullptr; // (n_active_experts,) - buffer for indices of top K experts (active experts)
   
@@ -232,11 +232,11 @@ private:
   void* _wo = nullptr; // (dim, n_heads * head_dim)
   
   // weights for ffn
-  void* _w1 = nullptr; // (n_experts?, hidden_dim, dim)
-  void* _w2 = nullptr; // (n_experts?, dim, hidden_dim)
-  void* _w3 = nullptr; // (n_experts?, hidden_dim, dim) - GLU weights
+  void* _w1 = nullptr; // (n_routed_experts?, hidden_dim, dim)
+  void* _w2 = nullptr; // (n_routed_experts?, dim, hidden_dim)
+  void* _w3 = nullptr; // (n_routed_experts?, hidden_dim, dim) - GLU weights
   // weights for mixture of experts router if present
-  void* _moegate = nullptr; // (n_experts?, dim)
+  void* _moegate = nullptr; // (n_routed_experts?, dim)
 
   // kv cache
   f16_t* _key_cache = nullptr;   // (seq_len, n_kv_heads * head_dim)

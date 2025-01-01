@@ -928,7 +928,7 @@ void Block::_block_cuda(
     }
   }
 
-  if (c.n_experts > 0) {
+  if (c.n_routed_experts > 0) {
     assert(false && "Mixture of experts not yet supported for CUDA");
   }
   

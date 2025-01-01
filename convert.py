@@ -52,8 +52,8 @@ class Metadata:
       self.act_type = config["hidden_act"]
 
       if arch in ["MixtralForCausalLM"]:
-        self.n_experts = config["num_local_experts"]
-        self.n_experts_active = config["num_experts_per_tok"]
+        self.n_routed_experts = config["num_local_experts"]
+        self.n_active_routed = config["num_experts_per_tok"]
   
   def to_dict(self):
     result = {}
@@ -76,8 +76,8 @@ class Metadata:
       result["norm_type"] = str(self.norm_type)
       result["act_type"] = str(self.act_type)
       if self.arch in ["MixtralForCausalLM"]:
-        result["n_experts"] = str(self.n_experts)
-        result["n_experts_active"] = str(self.n_experts_active)
+        result["n_routed_experts"] = str(self.n_routed_experts)
+        result["n_active_routed"] = str(self.n_active_routed)
     return result
 
 # this is a horrible gpt-2 unicode byte encoder hack from https://github.com/openai/gpt-2/blob/master/src/encoder.py#L9
