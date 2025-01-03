@@ -13,9 +13,10 @@ from safetensors.torch import save_file
 import torch
 
 SUPPORTED_ARCHITECTURES = [
-  "LlamaForCausalLM",
-  "MistralForCausalLM",
-  "MixtralForCausalLM"
+  # TODO: Llama (deepseek 1)?
+  # TODO: DeepseekForCausalLM
+  "DeepseekV2ForCausalLM",
+  # TODO: DeepseekV3ForCausalLM
 ]
 SUPPORTED_DTYPES = ["fp32", "fp16", "fp8"]
 
@@ -28,10 +29,9 @@ class Metadata:
     if dtype not in SUPPORTED_DTYPES:
       raise Exception(f"Data type {dtype} is not supported, must be one of {SUPPORTED_DTYPES}")
     self.dtype = dtype
-    if arch in ["MistralForCausalLM", "LlamaForCausalLM", "MixtralForCausalLM"]:
+    if arch in ["DeepseekV2ForCausalLM"]:
       self.dim = config["hidden_size"]
       self.hidden_dim = config["intermediate_size"]
-      self.head_dim = config.get("head_dim", config["hidden_size"] // config["num_attention_heads"])
       self.n_layers = config["num_hidden_layers"]
       self.n_heads = config["num_attention_heads"]
       self.n_kv_heads = config.get("num_key_value_heads", config["num_attention_heads"])
@@ -44,25 +44,39 @@ class Metadata:
       self.norm_eps = config["rms_norm_eps"]
       self.norm_type = "rmsnorm"
 
-      # TODO support bias
       assert config.get("attention_bias", False) == False
       assert config.get("mlp_bias", False) == False
 
       assert config["hidden_act"] in ["gelu", "silu"]
       self.act_type = config["hidden_act"]
+      self.first_k_dense_replace = config["first_k_dense_replace"]
 
-      if arch in ["MixtralForCausalLM"]:
-        self.n_routed_experts = config["num_local_experts"]
-        self.n_active_routed = config["num_experts_per_tok"]
+      # multi-latent attention
+      self.kv_lora_rank = config["kv_lora_rank"]
+      assert config.get("q_lora_rank", None) is None # TODO: support for Deepseek v3, DeepSeek v2 base
+      self.qk_nope_head_dim = config["qk_nope_head_dim"]
+      self.qk_rope_head_dim = config["qk_rope_head_dim"]
+      assert config.get("quantization_config", None) is None # TODO: support for Deepseek v3
+      self.v_head_dim = config["v_head_dim"]
+
+      # mixture of experts
+      self.n_shared_experts = config["n_shared_experts"]
+      self.n_routed_experts = config["n_routed_experts"]
+      self.n_active_routed = config["num_experts_per_tok"]
+      self.moe_intermediate_size = config["moe_intermediate_size"]
+      assert config.get("norm_topk_prob", False) == False # TODO: support for Deepseek v3
+      assert config.get("routed_scaling_factor", 1.0) == 1.0 # TODO: support for Deepseek v3
+      assert config.get("scoring_func", "softmax") == "softmax" # TODO: support for Deepseek v3
+      self.topk_group = config["topk_group"]
+      assert config["topk_method"] != "noaux_tc" # TODO: support for Deepseek v3
   
   def to_dict(self):
     result = {}
     result["arch"] = self.arch
     result["dtype"] = self.dtype
-    if self.arch in ["MistralForCausalLM", "LlamaForCausalLM", "MixtralForCausalLM"]:
+    if self.arch in ["DeepseekV2ForCausalLM"]:
       result["dim"] = str(self.dim)
       result["hidden_dim"] = str(self.hidden_dim)
-      result["head_dim"] = str(self.head_dim)
       result["n_layers"] = str(self.n_layers)
       result["n_heads"] = str(self.n_heads)
       result["n_kv_heads"] = str(self.n_kv_heads)
@@ -75,9 +89,18 @@ class Metadata:
       result["norm_eps"] = str(self.norm_eps)
       result["norm_type"] = str(self.norm_type)
       result["act_type"] = str(self.act_type)
-      if self.arch in ["MixtralForCausalLM"]:
-        result["n_routed_experts"] = str(self.n_routed_experts)
-        result["n_active_routed"] = str(self.n_active_routed)
+      result["first_k_dense_replace"] = str(self.first_k_dense_replace)
+      # multi-latent attention
+      result["kv_lora_rank"] = str(self.kv_lora_rank)
+      result["qk_nope_head_dim"] = str(self.qk_nope_head_dim)
+      result["qk_rope_head_dim"] = str(self.qk_rope_head_dim)
+      result["v_head_dim"] = str(self.v_head_dim)
+      # mixture of experts
+      result["n_shared_experts"] = str(self.n_shared_experts)
+      result["n_routed_experts"] = str(self.n_routed_experts)
+      result["n_active_routed"] = str(self.n_active_routed)
+      result["moe_intermediate_size"] = str(self.moe_intermediate_size)
+      result["topk_group"] = str(self.topk_group)
     return result
 
 # this is a horrible gpt-2 unicode byte encoder hack from https://github.com/openai/gpt-2/blob/master/src/encoder.py#L9
@@ -138,25 +161,6 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings):
         for k in f.keys():
           assert(k not in weights)
           weights[k] = f.get_tensor(k)
-  
-  # Stolen from https://github.com/zeux/calm/blob/86dfb56daba5052c260a2dd86d296309cfbd4324/tools/convert.py#L223
-  # huggingface permutes WQ and WK, this function reverses it
-  # see https://github.com/huggingface/transformers/blob/b132c1703eb1c8bd9dfa4ad6a9be2bfd6ef819e9/src/transformers/models/llama/convert_llama_weights_to_hf.py#L122
-  def permute_reverse(w, heads, rotary_dim):
-    head_dim = w.shape[0] // heads
-    assert rotary_dim <= head_dim
-    w = torch.unflatten(w, 0, (-1, head_dim))
-    # wr is the rotary part, wk is the part kept unrotated
-    wr = w[:, :rotary_dim]
-    wk = w[:, rotary_dim:]
-    # switch wr from outputting two rotary_dim/2 chunks to outputting values interleaved
-    wr = torch.unflatten(wr, 1, (2, -1))
-    wr = wr.transpose(1, 2)
-    wr = wr.flatten(1, 2)
-    # assemble the heads back
-    w = torch.cat([wr, wk], dim=1)
-    return torch.flatten(w, 0, 1)
-
   dtype = {"fp32": torch.float32, "fp16": torch.float16, "fp8": torch.float8_e5m2}[dtype_str]
 
   # convert weights
@@ -172,29 +176,27 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings):
 
   for l in range(config["num_hidden_layers"]):
     tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
+    tensors[f"model.layers.{l}.attn.kv_a_norm.weight"] = weights[f"model.layers.{l}.self_attn.kv_a_layernorm.weight"].float()
 
-    rotary_dim = metadata.rotary_dim
-    n_heads = metadata.n_heads
-    n_kv_heads = metadata.n_kv_heads
-
-    tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], n_heads, rotary_dim))
-    tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], n_kv_heads, rotary_dim))
-
-    tensors[f"model.layers.{l}.attn.wv.weight"] = conv(weights[f"model.layers.{l}.self_attn.v_proj.weight"])
+    tensors[f"model.layers.{l}.attn.wkv_a.weight"] = conv(weights[f"model.layers.{l}.self_attn.kv_a_proj_with_mqa.weight"])
+    tensors[f"model.layers.{l}.attn.wkv_b.weight"] = conv(weights[f"model.layers.{l}.self_attn.kv_b_proj.weight"])
     tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.o_proj.weight"])
+    tensors[f"model.layers.{l}.attn.wq.weight"] = conv(weights[f"model.layers.{l}.self_attn.q_proj.weight"])
 
     tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
 
-    if metadata.arch in ["MixtralForCausalLM"]:
-      tensors[f"model.layers.{l}.moegate.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.gate.weight"])
-
-      tensors[f"model.layers.{l}.mlp.w1.weight"] = torch.stack([conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w1.weight"]) for e in range(config["num_local_experts"])])
-      tensors[f"model.layers.{l}.mlp.w2.weight"] = torch.stack([conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w2.weight"]) for e in range(config["num_local_experts"])])
-      tensors[f"model.layers.{l}.mlp.w3.weight"] = torch.stack([conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w3.weight"]) for e in range(config["num_local_experts"])])
-    else:
+    if l < metadata.first_k_dense_replace:
       tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.gate_proj.weight"])
       tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.down_proj.weight"])
       tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"model.layers.{l}.mlp.up_proj.weight"])
+    else:
+      tensors[f"model.layers.{l}.moegate.weight"] = conv(weights[f"model.layers.{l}.mlp.gate.weight"])
+      tensors[f"model.layers.{l}.mlp.w1.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.gate_proj.weight"]) for e in range(metadata.n_routed_experts)])
+      tensors[f"model.layers.{l}.mlp.w2.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.down_proj.weight"]) for e in range(metadata.n_routed_experts)])
+      tensors[f"model.layers.{l}.mlp.w3.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.up_proj.weight"]) for e in range(metadata.n_routed_experts)])
+      tensors[f"model.layers.{l}.shared_mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.shared_experts.gate_proj.weight"])
+      tensors[f"model.layers.{l}.shared_mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.shared_experts.down_proj.weight"])
+      tensors[f"model.layers.{l}.shared_mlp.w3.weight"] = conv(weights[f"model.layers.{l}.mlp.shared_experts.up_proj.weight"])
 
   tensors["model.norm.weight"] = weights["model.norm.weight"].float()
   if tie_word_embeddings == False:
