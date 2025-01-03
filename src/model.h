@@ -40,8 +40,7 @@ extern "C" void init_cuda_stream(cudaStream_t* stream);
 
 struct Config {
   int dim;                  // transformer input & output dimension
-  int hidden_dim;           // dimension of hidden layer in feedforward network
-  int head_dim;             // dimension of each attention head, usually dim / n_heads
+  int hidden_dim;           // dimension of hidden layer in feedforward network (dense blocks only)
   int n_layers;             // number of layers
   int n_heads;              // number of attention query heads
   int n_kv_heads;           // number of key and value heads; can be < n_heads (1 is MultiQueryAttention, >1 is GroupedQueryAttention)
@@ -53,10 +52,19 @@ struct Config {
   ActivationType act;       // activation function
   LayerNormType norm_type;  // norm type
   float qkv_clip;           // clip qkv values to [-clip, clip]
+  int first_k_dense_replace; // how many blocks to keep the dense FFN (when sparse MoE is default)
   // mixture of experts
+  int n_shared_experts;
   int n_routed_experts;
   int n_active_routed;
-
+  int moe_intermediate_size;
+  int topk_group;
+  // multi-latent attention
+  int kv_lora_rank;
+  int qk_nope_head_dim;
+  int qk_rope_head_dim;
+  int v_head_dim;
+  int head_dim;             // dimension of each attention head, equal to qk_nope_head_dim + qk_rope_head_dim
   // Data type of the weights according to config, used
   // to safety check tensor dtype at initialization time.
   DType weight_dtype;
@@ -95,6 +103,8 @@ struct InferenceState {
   float* hb2() const { return _hb2; }
   float* q() const { return _q; }
   float* q(int head) const { return _q + _config->head_dim * head; }
+  float* kv_a() const { return _kv_a; }
+  float* kv_b() const { return _kv_b; }
   float* k() const { return _k; }
   float* v() const { return _v; }
   float* att() const { return _att; }
@@ -126,13 +136,14 @@ private:
   // current activations
   float* _x = nullptr;         // (dim,) - latest activation
   float* _xb = nullptr;        // (dim,) - activation inside a residual branch
-  // TODO: do we need xb2?
   float* _xb2 = nullptr;       // (dim,) - activation inside a residual branch (second slot)
   float* _hb = nullptr;        // (hidden_dim,) - buffer for hidden dimension in feedforward network
   float* _hb2 = nullptr;       // (hidden_dim,) - buffer for hidden dimension in feedforward network (second slot)
   float* _q = nullptr;         // (n_heads * head_dim,) - query vectors for latest timestamp
+  float* _kv_a = nullptr;      // (kv_lora_rank + qk_rope_head_dim,) - compressed (latent) key-value vector for latest timestamp
+  float* _kv_b = nullptr;      // (n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim),) - uncompressed key-value vector for latest timestamp
   float* _k = nullptr;         // (n_kv_heads * head_dim,) - key vectors for latest timestamp
-  float* _v = nullptr;         // (n_kv_heads * head_dim,) - value vectors for latest timestamp
+  float* _v = nullptr;         // (n_kv_heads * v_head_dim,) - value vectors for latest timestamp
   float* _att = nullptr;       // (n_heads, seq_len) - buffer for attention scores
   // mixture of experts
   float* _moe_weights = nullptr; // (n_routed_experts,) - buffer for expert weights, decided by router
@@ -151,26 +162,31 @@ struct Block {
     int layer_i,
     const std::shared_ptr<Config> config,
     const Tensor* rms_att_weight,
+    const Tensor* rms_kv_a_weight,
     const Tensor* rms_ffn_weight,
     const Tensor* wq,
-    const Tensor* wk,
-    const Tensor* wv,
+    const Tensor* wkv_a,
+    const Tensor* wkv_b,
     const Tensor* wo,
     const Tensor* w1,
     const Tensor* w2,
     const Tensor* w3,
+    const Tensor* shared_w1,
+    const Tensor* shared_w2,
+    const Tensor* shared_w3,
     const Tensor* moegate
   );
   ~Block();
 
   float* rms_att_weight() const { return _rms_att_weight; }
   float* rms_ffn_weight() const { return _rms_ffn_weight; }
+  float* rms_kv_a_weight() const { return _rms_kv_a_weight; }
   template <typename T>
   T* wq() const { return static_cast<T*>(_wq); }
   template <typename T>
-  T* wk() const { return static_cast<T*>(_wk); }
+  T* wkv_a() const { return static_cast<T*>(_wkv_a); }
   template <typename T>
-  T* wv() const { return static_cast<T*>(_wv); }
+  T* wkv_b() const { return static_cast<T*>(_wkv_b); }
   template <typename T>
   T* wo() const { return static_cast<T*>(_wo); }
   template <typename T>
@@ -181,6 +197,12 @@ struct Block {
   T* w3() const { return static_cast<T*>(_w3); }
   template <typename T>
   T* moegate() const { return static_cast<T*>(_moegate); }
+  template <typename T>
+  T* shared_w1() const { return static_cast<T*>(_shared_w1); }
+  template <typename T>
+  T* shared_w2() const { return static_cast<T*>(_shared_w2); }
+  template <typename T>
+  T* shared_w3() const { return static_cast<T*>(_shared_w3); }
   f16_t* key_cache() const { return _key_cache; }
   f16_t* value_cache() const { return _value_cache; }
 
@@ -223,18 +245,22 @@ private:
 
   // weights for norms
   float* _rms_att_weight = nullptr; // (dim) rmsnorm weights
+  float* _rms_kv_a_weight = nullptr; // (kv_lora_rank + qk_rope_head_dim)
   float* _rms_ffn_weight = nullptr; // (dim)
 
   // weights for self-attention matmuls
   void* _wq = nullptr; // (n_heads * head_dim, dim)
-  void* _wk = nullptr; // (n_kv_heads * head_dim, dim)
-  void* _wv = nullptr; // (n_kv_heads * head_dim, dim)
-  void* _wo = nullptr; // (dim, n_heads * head_dim)
+  void* _wkv_a = nullptr; // (kv_lora_rank + qk_rope_head_dim, dim)
+  void* _wkv_b = nullptr; // (n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim), kv_lora_rank)
+  void* _wo = nullptr; // (dim, n_heads * v_head_dim)
   
   // weights for ffn
-  void* _w1 = nullptr; // (n_routed_experts?, hidden_dim, dim)
-  void* _w2 = nullptr; // (n_routed_experts?, dim, hidden_dim)
-  void* _w3 = nullptr; // (n_routed_experts?, hidden_dim, dim) - GLU weights
+  void* _w1 = nullptr; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
+  void* _w2 = nullptr; // (n_routed_experts?, dim, moe_intermediate_size) or (dim, hidden_dim)
+  void* _w3 = nullptr; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
+  void* _shared_w1 = nullptr; // (n_shared_experts?, moe_intermediate_size, dim)
+  void* _shared_w2 = nullptr; // (n_shared_experts?, dim, moe_intermediate_size)
+  void* _shared_w3 = nullptr; // (n_shared_experts?, moe_intermediate_size, dim)
   // weights for mixture of experts router if present
   void* _moegate = nullptr; // (n_routed_experts?, dim)
 

@@ -16,14 +16,22 @@ using json = nlohmann::json;
 void Config::from_yalm(YALMData& yalm, int context) {
   dim = std::stoi(yalm.metadata.at("dim").get<std::string>());
   hidden_dim = std::stoi(yalm.metadata.at("hidden_dim").get<std::string>());
-  head_dim = std::stoi(yalm.metadata.at("head_dim").get<std::string>());
   n_layers = std::stoi(yalm.metadata.at("n_layers").get<std::string>());
   n_heads = std::stoi(yalm.metadata.at("n_heads").get<std::string>());
   n_kv_heads = std::stoi(yalm.metadata.at("n_kv_heads").get<std::string>());
   vocab_size = std::stoi(yalm.metadata.at("vocab_size").get<std::string>());
   // mixture of experts
+  n_shared_experts = yalm.metadata.contains("n_shared_experts") ? std::stoi(yalm.metadata.at("n_shared_experts").get<std::string>()) : 0;
   n_routed_experts = yalm.metadata.contains("n_routed_experts") ? std::stoi(yalm.metadata.at("n_routed_experts").get<std::string>()) : 0;
   n_active_routed = yalm.metadata.contains("n_active_routed") ? std::stoi(yalm.metadata.at("n_active_routed").get<std::string>()) : 0;
+  moe_intermediate_size = yalm.metadata.contains("moe_intermediate_size") ? std::stoi(yalm.metadata.at("moe_intermediate_size").get<std::string>()) : 0;
+  topk_group = yalm.metadata.contains("topk_group") ? std::stoi(yalm.metadata.at("topk_group").get<std::string>()) : 0;
+  // multi-latent attention
+  kv_lora_rank = yalm.metadata.contains("kv_lora_rank") ? std::stoi(yalm.metadata.at("kv_lora_rank").get<std::string>()) : 0;
+  qk_nope_head_dim = yalm.metadata.contains("qk_nope_head_dim") ? std::stoi(yalm.metadata.at("qk_nope_head_dim").get<std::string>()) : 0;
+  qk_rope_head_dim = yalm.metadata.contains("qk_rope_head_dim") ? std::stoi(yalm.metadata.at("qk_rope_head_dim").get<std::string>()) : 0;
+  v_head_dim = yalm.metadata.contains("v_head_dim") ? std::stoi(yalm.metadata.at("v_head_dim").get<std::string>()) : 0;
+  head_dim = qk_nope_head_dim + qk_rope_head_dim;
 
   // for now limit seq_len to 4096 to avoid KV cache OOM for models like Mistral since window size isn't correctly specified
   max_seq_len = std::min(std::stoi(yalm.metadata.at("max_seq_len").get<std::string>()), 4096);
@@ -55,6 +63,8 @@ void Config::from_yalm(YALMData& yalm, int context) {
   }
 
   qkv_clip = yalm.metadata.contains("qkv_clip") ? std::stof(yalm.metadata.at("qkv_clip").get<std::string>()) : FLT_MAX;
+  first_k_dense_replace = yalm.metadata.contains("first_k_dense_replace") ? 
+    std::stoi(yalm.metadata.at("first_k_dense_replace").get<std::string>()) : 0;
 
   std::string dtype = yalm.metadata.at("dtype").get<std::string>();
   // TODO: support fp8
@@ -73,14 +83,19 @@ size_t Config::active_bytes(size_t pos) const {
 
   size_t bytes_per_block = 0;
   bytes_per_block += 2 * dim * sizeof(float); // rms_att_weight, rms_ffn_weight
+  bytes_per_block += (kv_lora_rank + qk_rope_head_dim) * sizeof(float); // rms_kv_a_weight
   bytes_per_block += n_heads * head_dim * dim * weight_size; // wq
-  bytes_per_block += 2 * n_kv_heads * head_dim * dim * weight_size; // wk, wv
-  bytes_per_block += n_heads * head_dim * dim * weight_size; // wo
+  bytes_per_block += (kv_lora_rank + qk_rope_head_dim) * dim * weight_size; // wkv_a
+  bytes_per_block += n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim) * kv_lora_rank * weight_size; // wkv_b
+  bytes_per_block += n_heads * v_head_dim * dim * weight_size; // wo
   if (n_routed_experts > 0) {
     bytes_per_block += n_routed_experts * dim * weight_size; // moegate
-    bytes_per_block += n_active_routed * 3 * dim * hidden_dim * weight_size; // w1, w2, w3
+    bytes_per_block += n_active_routed * 3 * dim * moe_intermediate_size * weight_size; // w1, w2, w3
   } else {
     bytes_per_block += 3 * dim * hidden_dim * weight_size; // w1, w2, w3
+  }
+  if (n_shared_experts > 0) {
+    bytes_per_block += n_shared_experts * dim * moe_intermediate_size * weight_size; // shared_w1, shared_w2, shared_w3
   }
   size_t kv_len = std::min(static_cast<size_t>(max_seq_len), pos + 1);
   size_t kv_entry_size = sizeof(f16_t);
@@ -129,14 +144,18 @@ Block::Block(
   int layer_i,
   const std::shared_ptr<Config> config,
   const Tensor* rms_att_weight,
+  const Tensor* rms_kv_a_weight,
   const Tensor* rms_ffn_weight,
   const Tensor* wq,
-  const Tensor* wk,
-  const Tensor* wv,
+  const Tensor* wkv_a,
+  const Tensor* wkv_b,
   const Tensor* wo,
   const Tensor* w1,
   const Tensor* w2,
   const Tensor* w3,
+  const Tensor* shared_w1,
+  const Tensor* shared_w2,
+  const Tensor* shared_w3,
   const Tensor* moegate
 ) {
   _layer_i = layer_i;
@@ -156,6 +175,9 @@ Block::Block(
   _rms_att_weight = static_cast<float*>(check_tensor(
     rms_att_weight, DType::F32, {config->dim, 0, 0, 0}
   ));
+  _rms_kv_a_weight = static_cast<float*>(check_tensor(
+    rms_kv_a_weight, DType::F32, {config->kv_lora_rank, 0, 0, 0}
+  ));
   _rms_ffn_weight = static_cast<float*>(check_tensor(
     rms_ffn_weight, DType::F32, {config->dim, 0, 0, 0}
   ));
@@ -163,29 +185,40 @@ Block::Block(
   _wq = check_tensor(
     wq, config->weight_dtype, {config->n_heads * config->head_dim, config->dim, 0, 0}
   );
-  _wk = check_tensor(
-    wk, config->weight_dtype, {config->n_kv_heads * config->head_dim, config->dim, 0, 0}
+  _wkv_a = check_tensor(
+    wkv_a, config->weight_dtype, {config->kv_lora_rank + config->qk_rope_head_dim, config->dim, 0, 0}
   );
-  _wv = check_tensor(
-    wv, config->weight_dtype, {config->n_kv_heads * config->head_dim, config->dim, 0, 0}
+  _wkv_b = check_tensor(
+    wkv_b, config->weight_dtype, {config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim), config->kv_lora_rank, 0, 0}
   );
   _wo = check_tensor(
-    wo, config->weight_dtype, {config->dim, config->n_heads * config->head_dim, 0, 0}
+    wo, config->weight_dtype, {config->dim, config->n_heads * config->v_head_dim, 0, 0}
   );
 
-  if (config->n_routed_experts > 0) {
+  if (config->n_routed_experts > 0 && layer_i >= config->first_k_dense_replace) {
     _moegate = check_tensor(
       moegate, config->weight_dtype, {config->n_routed_experts, config->dim, 0, 0}
     );
     _w1 = check_tensor(
-      w1, config->weight_dtype, {config->n_routed_experts, config->hidden_dim, config->dim, 0}
+      w1, config->weight_dtype, {config->n_routed_experts, config->moe_intermediate_size, config->dim, 0}
     );
     _w2 = check_tensor(
-      w2, config->weight_dtype, {config->n_routed_experts, config->dim, config->hidden_dim, 0}
+      w2, config->weight_dtype, {config->n_routed_experts, config->dim, config->moe_intermediate_size, 0}
     );
     _w3 = check_tensor(
-      w3, config->weight_dtype, {config->n_routed_experts, config->hidden_dim, config->dim, 0}
+      w3, config->weight_dtype, {config->n_routed_experts, config->moe_intermediate_size, config->dim, 0}
     );
+    if (config->n_shared_experts > 0) {
+      _shared_w1 = check_tensor(
+        shared_w1, config->weight_dtype, {config->n_shared_experts * config->moe_intermediate_size, config->dim, 0}
+      );
+      _shared_w2 = check_tensor(
+        shared_w2, config->weight_dtype, {config->dim, config->n_shared_experts * config->moe_intermediate_size, 0}
+      );
+      _shared_w3 = check_tensor(
+        shared_w3, config->weight_dtype, {config->n_shared_experts * config->moe_intermediate_size, config->dim, 0}
+      );
+    }
   } else {
     _w1 = check_tensor(
       w1, config->weight_dtype, {config->hidden_dim, config->dim, 0, 0}
@@ -220,18 +253,31 @@ void Block::cuda() {
   size_t weight_size = dtype_size(_config->weight_dtype);
   // norms
   _rms_att_weight = static_cast<float*>(upload_cuda(_rms_att_weight, _config->dim * sizeof(float)));
+  _rms_kv_a_weight = static_cast<float*>(upload_cuda(_rms_kv_a_weight, _config->kv_lora_rank * sizeof(float)));
   _rms_ffn_weight = static_cast<float*>(upload_cuda(_rms_ffn_weight, _config->dim * sizeof(float)));
 
   // self-attention
   _wq = upload_cuda(_wq, _config->n_heads * _config->head_dim * _config->dim * weight_size);
-  _wk = upload_cuda(_wk, _config->n_kv_heads * _config->head_dim * _config->dim * weight_size);
-  _wv = upload_cuda(_wv, _config->n_kv_heads * _config->head_dim * _config->dim * weight_size);
+  _wkv_a = upload_cuda(_wkv_a, (_config->kv_lora_rank + _config->qk_rope_head_dim) * _config->dim * weight_size);
+  _wkv_b = upload_cuda(_wkv_b, _config->n_kv_heads * (_config->head_dim-_config->qk_rope_head_dim+_config->v_head_dim) * _config->kv_lora_rank * weight_size);
   _wo = upload_cuda(_wo, _config->dim * _config->n_heads * _config->head_dim * weight_size);
 
   // ffn
-  _w1 = upload_cuda(_w1, _config->hidden_dim * _config->dim * weight_size);
-  _w2 = upload_cuda(_w2, _config->dim * _config->hidden_dim * weight_size);
-  _w3 = upload_cuda(_w3, _config->hidden_dim * _config->dim * weight_size);
+  if (_config->n_routed_experts > 0 && _layer_i >= _config->first_k_dense_replace) {
+    _moegate = upload_cuda(_moegate, _config->n_routed_experts * _config->dim * weight_size);
+    _w1 = upload_cuda(_w1, _config->n_routed_experts * _config->moe_intermediate_size * _config->dim * weight_size);
+    _w2 = upload_cuda(_w2, _config->n_routed_experts * _config->dim * _config->moe_intermediate_size * weight_size);
+    _w3 = upload_cuda(_w3, _config->n_routed_experts * _config->moe_intermediate_size * _config->dim * weight_size);
+  } else {
+    _w1 = upload_cuda(_w1, _config->hidden_dim * _config->dim * weight_size);
+    _w2 = upload_cuda(_w2, _config->dim * _config->hidden_dim * weight_size);
+    _w3 = upload_cuda(_w3, _config->hidden_dim * _config->dim * weight_size);
+  }
+  if (_config->n_shared_experts > 0) {
+    _shared_w1 = upload_cuda(_shared_w1, _config->n_shared_experts * _config->moe_intermediate_size * _config->dim * weight_size);
+    _shared_w2 = upload_cuda(_shared_w2, _config->n_shared_experts * _config->dim * _config->moe_intermediate_size * weight_size);
+    _shared_w3 = upload_cuda(_shared_w3, _config->n_shared_experts * _config->moe_intermediate_size * _config->dim * weight_size);
+  }
 
   // kv cache
   _key_cache = static_cast<f16_t*>(upload_cuda(_key_cache, _config->max_seq_len * _config->n_kv_heads * _config->head_dim * sizeof(f16_t)));
@@ -290,8 +336,10 @@ InferenceState::InferenceState(const std::shared_ptr<Config> config):
   _hb = new float[config->hidden_dim]();
   _hb2 = new float[config->hidden_dim]();
   _q = new float[config->n_heads * config->head_dim]();
+  _kv_a = new float[config->kv_lora_rank + config->qk_rope_head_dim]();
+  _kv_b = new float[config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim)]();
   _k = new float[config->n_kv_heads * config->head_dim]();
-  _v = new float[config->n_kv_heads * config->head_dim]();
+  _v = new float[config->n_kv_heads * config->v_head_dim]();
   _att = new float[config->n_heads * config->max_seq_len]();
   _logits = new float[config->vocab_size]();
   if (config->n_routed_experts > 0) {
@@ -309,6 +357,8 @@ InferenceState::~InferenceState() {
     delete[] _hb;
     delete[] _hb2;
     delete[] _q;
+    delete[] _kv_a;
+    delete[] _kv_b;
     delete[] _k;
     delete[] _v;
     delete[] _att;
@@ -325,6 +375,8 @@ InferenceState::~InferenceState() {
     free_cuda(_hb);
     free_cuda(_hb2);
     free_cuda(_q);
+    free_cuda(_kv_a);
+    free_cuda(_kv_b);
     free_cuda(_k);
     free_cuda(_v);
     free_cuda(_att);
@@ -350,8 +402,10 @@ void InferenceState::cuda() {
   _hb = static_cast<float*>(upload_cuda(_hb, _config->hidden_dim * sizeof(float)));
   _hb2 = static_cast<float*>(upload_cuda(_hb2, _config->hidden_dim * sizeof(float)));
   _q = static_cast<float*>(upload_cuda(_q, _config->n_heads * _config->head_dim * sizeof(float)));
+  _kv_a = static_cast<float*>(upload_cuda(_kv_a, (_config->kv_lora_rank + _config->qk_rope_head_dim) * sizeof(float)));
+  _kv_b = static_cast<float*>(upload_cuda(_kv_b, _config->n_kv_heads * (_config->head_dim-_config->qk_rope_head_dim+_config->v_head_dim) * sizeof(float)));
   _k = static_cast<float*>(upload_cuda(_k, _config->n_kv_heads * _config->head_dim * sizeof(float)));
-  _v = static_cast<float*>(upload_cuda(_v, _config->n_kv_heads * _config->head_dim * sizeof(float)));
+  _v = static_cast<float*>(upload_cuda(_v, _config->n_kv_heads * _config->v_head_dim * sizeof(float)));
   _att = static_cast<float*>(upload_cuda(_att, _config->n_heads * _config->max_seq_len * sizeof(float)));
   register_cuda_host(_logits, _config->vocab_size * sizeof(float));
   if (_moe_weights != nullptr) {
@@ -377,15 +431,19 @@ Model::Model(YALMData& yalm, int context) {
       i,
       config,
       get_tensor(yalm, fmt::format("model.layers.{}.attn.norm.weight", i)),
+      get_tensor(yalm, fmt::format("model.layers.{}.attn.kv_a_norm.weight", i)),
       get_tensor(yalm, fmt::format("model.layers.{}.mlp.norm.weight", i)),
       get_tensor(yalm, fmt::format("model.layers.{}.attn.wq.weight", i)),
-      get_tensor(yalm, fmt::format("model.layers.{}.attn.wk.weight", i)),
-      get_tensor(yalm, fmt::format("model.layers.{}.attn.wv.weight", i)),
+      get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_a.weight", i)),
+      get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_b.weight", i)),
       get_tensor(yalm, fmt::format("model.layers.{}.attn.wo.weight", i)),
       get_tensor(yalm, fmt::format("model.layers.{}.mlp.w1.weight", i)),
       get_tensor(yalm, fmt::format("model.layers.{}.mlp.w2.weight", i)),
       get_tensor(yalm, fmt::format("model.layers.{}.mlp.w3.weight", i)),
-      config->n_routed_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.weight", i)) : nullptr
+      i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w1.weight", i)) : nullptr,
+      i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w2.weight", i)) : nullptr,
+      i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w3.weight", i)) : nullptr,
+      i >= config->first_k_dense_replace && config->n_routed_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.weight", i)) : nullptr
     ));
   }
 

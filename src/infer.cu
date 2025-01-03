@@ -538,6 +538,7 @@ void rmsnorm(const float* x, const float* weight, int size, float eps, float* ou
   }
 }
 
+// TODO: update me for MLA
 __device__
 inline void rope(
   const float* x, int pair_idx, int head_dim, int pos, float theta, int rotary_dim, float* out
@@ -558,6 +559,7 @@ inline void rope(
   }
 }
 
+// TODO: update me for MLA
 __device__
 inline void rope(
   const float* x, int pair_idx, int head_dim, int pos, float theta, int rotary_dim, half* out
@@ -578,6 +580,7 @@ inline void rope(
   }
 }
 
+// TODO: update me for MLA
 __device__
 inline void rope(
   const half* x, int pair_idx, int head_dim, int pos, float theta, int rotary_dim, half* out
@@ -750,19 +753,20 @@ void Block::_block_cuda(
     // qkv matmuls for this position
     // some models require clipping qkv values
     int total_rows = q_dim + 2 * kv_dim;  // Total rows across Q, K, V
-    STATIC_KERNEL((fused_qkv_matmul_clip<<<total_rows, warp_size, 0, s.stream()>>>(
-      wq<T>(),
-      wk<T>(),
-      wv<T>(),
-      s.xb(),
-      c.dim,
-      q_dim,
-      kv_dim,
-      c.qkv_clip,
-      s.q(),
-      s.k(),
-      s.v()
-    )));
+    // TODO: update me for MLA
+    // STATIC_KERNEL((fused_qkv_matmul_clip<<<total_rows, warp_size, 0, s.stream()>>>(
+    //   wq<T>(),
+    //   wk<T>(),
+    //   wv<T>(),
+    //   s.xb(),
+    //   c.dim,
+    //   q_dim,
+    //   kv_dim,
+    //   c.qkv_clip,
+    //   s.q(),
+    //   s.k(),
+    //   s.v()
+    // )));
   }
   
   // Update Q, K with RoPE relative positional encoding: 

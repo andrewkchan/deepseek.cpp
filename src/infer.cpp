@@ -198,7 +198,7 @@ inline float clip(float x, float v) {
   return x < -v ? -v : (x > v ? v : x);
 }
 
-// TODO annotate me
+// TODO: update me for MLA
 static void rope(float* vec, int d, int head_dim, int pos, float theta, int rotary_dim) {
   for (int i = 0; i < d; i += 2) {
     int j_head = i % head_dim;
@@ -277,8 +277,9 @@ void Block::_block_cpu(
 
   // qkv matmuls for this position
   matmul(s.q(), s.xb(), wq<T>(), c.dim, q_dim);
-  matmul(s.k(), s.xb(), wk<T>(), c.dim, kv_dim);
-  matmul(s.v(), s.xb(), wv<T>(), c.dim, kv_dim);
+  // TODO: update me for MLA
+  // matmul(s.k(), s.xb(), wk<T>(), c.dim, kv_dim);
+  // matmul(s.v(), s.xb(), wv<T>(), c.dim, kv_dim);
 
   // some models require clipping qkv values
   for (int i = 0; i < q_dim; ++i) {
