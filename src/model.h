@@ -47,11 +47,9 @@ struct Config {
   int vocab_size;           // vocabulary size
   int max_seq_len;          // max sequence length
   float rope_theta;         // RoPE theta
-  int rotary_dim;           // dimension of rotary position encoding (elements after that don't get rotated)
   float norm_eps;           // epsilon for layer normalization
   ActivationType act;       // activation function
   LayerNormType norm_type;  // norm type
-  float qkv_clip;           // clip qkv values to [-clip, clip]
   int first_k_dense_replace; // how many blocks to keep the dense FFN (when sparse MoE is default)
   // mixture of experts
   int n_shared_experts;
@@ -105,8 +103,11 @@ struct InferenceState {
   float* q(int head) const { return _q + _config->head_dim * head; }
   float* kv_a() const { return _kv_a; }
   float* kv_b() const { return _kv_b; }
+  float* kv_b(int head) const { return _kv_b + (_config->head_dim - _config->qk_rope_head_dim + _config->v_head_dim) * head; }
   float* k() const { return _k; }
+  float* k(int head) const { return _k + _config->head_dim * head; }
   float* v() const { return _v; }
+  float* v(int head) const { return _v + _config->v_head_dim * head; }
   float* att() const { return _att; }
   float* att(int head) const { return _att + _config->max_seq_len * head; }
   // mixture of experts
@@ -204,7 +205,9 @@ struct Block {
   template <typename T>
   T* shared_w3() const { return static_cast<T*>(_shared_w3); }
   f16_t* key_cache() const { return _key_cache; }
+  f16_t* key_cache(int pos) const { return _key_cache + pos * _config->head_dim * _config->n_kv_heads; }
   f16_t* value_cache() const { return _value_cache; }
+  f16_t* value_cache(int pos) const { return _value_cache + pos * _config->v_head_dim * _config->n_kv_heads; }
 
   // Compute forward pass for this block and update the inference state accordingly.
   // PRECONDITIONS: 
@@ -266,7 +269,7 @@ private:
 
   // kv cache
   f16_t* _key_cache = nullptr;   // (seq_len, n_kv_heads * head_dim)
-  f16_t* _value_cache = nullptr; // (seq_len, n_kv_heads * head_dim)
+  f16_t* _value_cache = nullptr; // (seq_len, n_kv_heads * v_head_dim)
 };
 
 struct Model {

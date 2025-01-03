@@ -198,19 +198,34 @@ inline float clip(float x, float v) {
   return x < -v ? -v : (x > v ? v : x);
 }
 
-// TODO: update me for MLA
-static void rope(float* vec, int d, int head_dim, int pos, float theta, int rotary_dim) {
-  for (int i = 0; i < d; i += 2) {
-    int j_head = i % head_dim;
-    float freq = j_head >= rotary_dim ? 0.f : 1.0f / powf(theta, (float)j_head / (float)rotary_dim);
+static void rope(float* vec, int d, int head_dim, int pos, float theta) {
+  assert(d % 2 == 0);
+  for (int i = 0; i < d/2; i++) {
+    int j_head = (i * 2) % head_dim;
+    float freq = 1.0f / powf(theta, (float)j_head / (float)head_dim);
     float val = pos * freq;
     float fcr = cosf(val);
     float fci = sinf(val);
 
     float v0 = vec[i];
-    float v1 = vec[i + 1];
+    float v1 = vec[i + d/2];
     vec[i] = v0 * fcr - v1 * fci;
-    vec[i + 1] = v0 * fci + v1 * fcr;
+    vec[i + d/2] = v0 * fci + v1 * fcr;
+  }
+}
+static void rope(f16_t* vec, int d, int head_dim, int pos, float theta) {
+  assert(d % 2 == 0);
+  for (int i = 0; i < d/2; i++) {
+    int j_head = (i * 2) % head_dim;
+    float freq = 1.0f / powf(theta, (float)j_head / (float)head_dim);
+    float val = pos * freq;
+    float fcr = cosf(val);
+    float fci = sinf(val);
+
+    float v0 = half_to_float(vec[i]);
+    float v1 = half_to_float(vec[i + d/2]);
+    vec[i] = float_to_half(v0 * fcr - v1 * fci);
+    vec[i + d/2] = float_to_half(v0 * fci + v1 * fcr);
   }
 }
 
@@ -273,34 +288,49 @@ void Block::_block_cpu(
   }
 
   int q_dim = c.n_heads * c.head_dim;
-  int kv_dim = c.n_kv_heads * c.head_dim;
 
   // qkv matmuls for this position
   matmul(s.q(), s.xb(), wq<T>(), c.dim, q_dim);
-  // TODO: update me for MLA
-  // matmul(s.k(), s.xb(), wk<T>(), c.dim, kv_dim);
-  // matmul(s.v(), s.xb(), wv<T>(), c.dim, kv_dim);
+  matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim);
 
-  // some models require clipping qkv values
-  for (int i = 0; i < q_dim; ++i) {
-    s.q()[i] = clip(s.q()[i], c.qkv_clip);
+  // Apply RoPE positional encoding to the PE chunks of q and kv_a
+  int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
+  for (int h = 0; h < c.n_heads; h++) {
+    rope(s.q(h) + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
   }
-  for (int i = 0; i < kv_dim; ++i) {
-    s.k()[i] = clip(s.k()[i], c.qkv_clip);
-    s.v()[i] = clip(s.v()[i], c.qkv_clip);
+  int kv_pe_offset = c.kv_lora_rank;
+  float* k_rope = s.kv_a() + kv_pe_offset;
+  rope(k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+  // rms norm to non-pe chunk of kv_a (compressed latent kv)
+  rmsnorm(s.kv_a(), s.kv_a(), rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
+  // un-compress the latent kv via multiplication with wkv_b
+  int qk_nope_head_dim = c.head_dim - c.qk_rope_head_dim;
+  int uncompressed_kv_dim = c.n_kv_heads * (qk_nope_head_dim + c.v_head_dim);
+  matmul(s.kv_b(), s.kv_a(), wkv_b<T>(), c.kv_lora_rank, uncompressed_kv_dim);
+  // concatenate kv_b and k_rope in each head to build key heads
+  for (int h = 0; h < c.n_heads; h++) {
+    for (int i = 0; i < qk_nope_head_dim; i++) {
+      s.k(h)[i] = s.kv_b(h)[i];
+    }
+    for (int i = 0; i < c.qk_rope_head_dim; i++) {
+      s.k(h)[qk_nope_head_dim + i] = k_rope[i];
+    }
   }
-
-  // RoPE relative positional encoding: complex-valued rotate q and k in each head
-  rope(s.q(), q_dim, c.head_dim, pos, c.rope_theta, c.rotary_dim);
-  rope(s.k(), kv_dim, c.head_dim, pos, c.rope_theta, c.rotary_dim);
+  // transfer value heads from kv_b
+  for (int h = 0; h < c.n_heads; h++) {
+    for (int i = 0; i < c.v_head_dim; i++) {
+      s.v(h)[i] = s.kv_b(h)[qk_nope_head_dim + i];
+    }
+  }
   
-  // key and value point to the kv cache
-  f16_t* kb = key_cache();
-  f16_t* vb = value_cache();
   // update kv cache
-  for (int i = 0; i < kv_dim; ++i) {
-    kb[kv_pos * kv_dim + i] = float_to_half(s.k()[i]);
-    vb[kv_pos * kv_dim + i] = float_to_half(s.v()[i]);
+  int key_dim = c.n_kv_heads * c.head_dim;
+  for (int i = 0; i < key_dim; ++i) {
+    key_cache(kv_pos)[i] = float_to_half(s.k()[i]);
+  }
+  int value_dim = c.n_kv_heads * c.v_head_dim;
+  for (int i = 0; i < value_dim; ++i) {
+    value_cache(kv_pos)[i] = float_to_half(s.v()[i]);
   }
 
   // Sink tokens remain untouched while the rest of the KV cache is incrementally 
@@ -308,25 +338,26 @@ void Block::_block_cpu(
   // away from current timestep. Hence, each forward pass, rotate sink tokens 
   // forward by 1. See https://arxiv.org/abs/2309.17453 for more.
   for (int r = 0; r < kv_sink; r++) {
-    for (int i = 0; i < kv_dim; ++i) {
-      s.k()[i] = half_to_float(kb[r * kv_dim + i]);
-    }
-
-    rope(s.k(), kv_dim, c.head_dim, 1, c.rope_theta, c.rotary_dim);
-
-    for (int i = 0; i < kv_dim; i++) {
-      kb[r * kv_dim + i] = float_to_half(s.k()[i]);
+    f16_t* key = key_cache(r);
+    // in-place update PE-chunk of each key head
+    int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
+    for (int h = 0; h < c.n_heads; h++) {
+      f16_t* kh = key + h * c.head_dim;
+      rope(kh + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
     }
   }
 
   // Multihead attention. Iterate over all heads.
+  f16_t* kb = key_cache();
+  f16_t* vb = value_cache();
   int q_per_kv_head = c.n_heads / c.n_kv_heads; // query heads per kv head (for MultiQueryAttention/GroupedQueryAttention)
   int h;
 #pragma omp parallel for private(h)
   for (h = 0; h < c.n_heads; h++) {
-    int kv_head_offset = (h / q_per_kv_head) * c.head_dim;
-    f16_t* kh = kb + kv_head_offset;
-    f16_t* vh = vb + kv_head_offset;
+    int k_head_offset = (h / q_per_kv_head) * c.head_dim;
+    int v_head_offset = (h / q_per_kv_head) * c.v_head_dim;
+    f16_t* kh = kb + k_head_offset;
+    f16_t* vh = vb + v_head_offset;
     attn(s.xb2(h), s.att(h), s.q(h), kh, vh, c.head_dim, c.n_kv_heads, kv_len);
   }
 
@@ -346,21 +377,70 @@ void Block::_block_cpu(
     }
   }
 
-  if (c.n_routed_experts > 0) {
+  if (c.n_routed_experts > 0 && moegate<T>() != nullptr) {
+    // Block is a sparse MoE FFN layer
     matmul(s.moe_weights(), s.xb(), moegate<T>(), c.dim, c.n_routed_experts);
     moe_gate(s.active_experts_weights(), s.active_experts(), s.moe_weights(), c.n_routed_experts, c.n_active_routed);
-  } else {
-    s.active_experts_weights()[0] = 1.0f;
-    s.active_experts()[0] = 0;
-  }
+    for (int k = 0; k < c.n_active_routed; ++k) {
+      int expert_index = s.active_experts()[k];
+      int expert_size = c.dim * c.moe_intermediate_size;
+      // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
+      // Note this is a feedforward with a GLU, not a simple MLP.
+      matmul(s.hb(), s.xb(), w1<T>() + expert_index * expert_size, c.dim, c.moe_intermediate_size);
+      matmul(s.hb2(), s.xb(), w3<T>() + expert_index * expert_size, c.dim, c.moe_intermediate_size);
+      switch (c.act) {
+        case ActivationType::GELU: {
+          for (int i = 0; i < c.moe_intermediate_size; ++i) {
+            s.hb()[i] = gelu(s.hb()[i]) * s.hb2()[i];
+          }
+          break;
+        }
+        case ActivationType::SILU: {
+          for (int i = 0; i < c.moe_intermediate_size; ++i) {
+            s.hb()[i] = silu(s.hb()[i]) * s.hb2()[i];
+          }
+          break;
+        }
+      }
+      matmul(s.xb2(), s.hb(), w2<T>() + expert_index * expert_size, c.moe_intermediate_size, c.dim);
+      float expert_weight = s.active_experts_weights()[k];
+      // residual connection back into x
+      for (int i = 0; i < c.dim; ++i) {
+        s.x()[i] += s.xb2()[i] * expert_weight;
+      }
+    }
+    if (c.n_shared_experts > 0) {
+      // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
+      // Note this is a feedforward with a GLU, not a simple MLP.
+      matmul(s.hb(), s.xb(), shared_w1<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size);
+      matmul(s.hb2(), s.xb(), shared_w3<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size);
+      switch (c.act) {
+        case ActivationType::GELU: {
+          for (int i = 0; i < c.n_shared_experts * c.moe_intermediate_size; ++i) {
+            s.hb()[i] = gelu(s.hb()[i]) * s.hb2()[i];
+          }
+          break;
+        }
+        case ActivationType::SILU: {
+          for (int i = 0; i < c.n_shared_experts * c.moe_intermediate_size; ++i) {
+            s.hb()[i] = silu(s.hb()[i]) * s.hb2()[i];
+          }
+          break;
+        }
+      }
 
-  for (int k = 0; k < (c.n_routed_experts > 0 ? c.n_active_routed : 1); ++k) {
-    int expert_index = s.active_experts()[k];
-    int expert_size = c.dim * c.hidden_dim;
+      matmul(s.xb2(), s.hb(), shared_w2<T>(), c.n_shared_experts * c.moe_intermediate_size, c.dim);
+      // residual connection back into x
+      for (int i = 0; i < c.dim; ++i) {
+        s.x()[i] += s.xb2()[i];
+      }
+    }
+  } else {
+    // Block is a dense FFN layer
     // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
     // Note this is a feedforward with a GLU, not a simple MLP.
-    matmul(s.hb(), s.xb(), w1<T>() + expert_index * expert_size, c.dim, c.hidden_dim);
-    matmul(s.hb2(), s.xb(), w3<T>() + expert_index * expert_size, c.dim, c.hidden_dim);
+    matmul(s.hb(), s.xb(), w1<T>(), c.dim, c.hidden_dim);
+    matmul(s.hb2(), s.xb(), w3<T>(), c.dim, c.hidden_dim);
     switch (c.act) {
       case ActivationType::GELU: {
         for (int i = 0; i < c.hidden_dim; ++i) {
@@ -375,13 +455,10 @@ void Block::_block_cpu(
         break;
       }
     }
-
-    matmul(s.xb2(), s.hb(), w2<T>() + expert_index * expert_size, c.hidden_dim, c.dim);
-    
-    float expert_weight = s.active_experts_weights()[k];
+    matmul(s.xb2(), s.hb(), w2<T>(), c.hidden_dim, c.dim);
     // residual connection back into x
     for (int i = 0; i < c.dim; ++i) {
-      s.x()[i] += s.xb2()[i] * expert_weight;
+      s.x()[i] += s.xb2()[i];
     }
   }
 }

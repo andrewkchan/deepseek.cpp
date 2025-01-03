@@ -40,7 +40,6 @@ class Metadata:
       self.bos_token_id = config["bos_token_id"]
       self.eos_token_id = config["eos_token_id"]
       self.rope_theta = config.get("rope_theta", 10000.0)
-      self.rotary_dim = int(self.head_dim * config.get("partial_rotary_factor", 1))
       self.norm_eps = config["rms_norm_eps"]
       self.norm_type = "rmsnorm"
 
@@ -85,7 +84,6 @@ class Metadata:
       result["bos_token_id"] = str(self.bos_token_id)
       result["eos_token_id"] = str(self.eos_token_id)
       result["rope_theta"] = str(self.rope_theta)
-      result["rotary_dim"] = str(self.rotary_dim)
       result["norm_eps"] = str(self.norm_eps)
       result["norm_type"] = str(self.norm_type)
       result["act_type"] = str(self.act_type)

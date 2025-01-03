@@ -774,65 +774,67 @@ void Block::_block_cuda(
   // Also copy K, V to KV cache
   half* kb = (half*)key_cache();
   half* vb = (half*)value_cache();
+  // TODO: update me for MLA
   {
     // Calculate number of thread blocks needed
     // We need enough threads to handle the largest of:
     // - n_heads * head_dim (for Q)
     // - n_kv_heads * head_dim (for K and V)
-    int max_dim = max(c.n_heads * c.head_dim, c.n_kv_heads * c.head_dim);
-    int threads_needed = (max_dim + 1) / 2;  // Each thread handles 2 elements
-    int num_blocks = (threads_needed + max_threads_per_block - 1) / max_threads_per_block;
+    // int max_dim = max(c.n_heads * c.head_dim, c.n_kv_heads * c.head_dim);
+    // int threads_needed = (max_dim + 1) / 2;  // Each thread handles 2 elements
+    // int num_blocks = (threads_needed + max_threads_per_block - 1) / max_threads_per_block;
 
-    cudaKernelNodeParams params;
-    params.blockDim = {static_cast<unsigned int>(max_threads_per_block), 1, 1};
-    params.gridDim = {static_cast<unsigned int>(num_blocks), 1, 1};
-    params.sharedMemBytes = 0;
-    params.func = reinterpret_cast<void*>(fused_rope_and_cache_update);
-    float* q = s.q();
-    float* k = s.k();
-    float* v = s.v();
-    void* kernelParams[] = {
-      &q,
-      &k,
-      &v,
-      (void*)&c.head_dim,
-      (void*)&c.n_heads,
-      (void*)&c.n_kv_heads,
-      &pos,
-      &kv_pos,
-      (void*)&c.rope_theta,
-      (void*)&c.rotary_dim,
-      &q,           // Q can be updated in-place
-      &kb,
-      &vb
-    };
-    params.kernelParams = kernelParams;
-    params.extra = nullptr;
-    s.graph().add_or_update_kernel_node(fmt::format("{}:fused_rope_and_cache_update", _layer_i), params, s.stream());
+    // cudaKernelNodeParams params;
+    // params.blockDim = {static_cast<unsigned int>(max_threads_per_block), 1, 1};
+    // params.gridDim = {static_cast<unsigned int>(num_blocks), 1, 1};
+    // params.sharedMemBytes = 0;
+    // params.func = reinterpret_cast<void*>(fused_rope_and_cache_update);
+    // float* q = s.q();
+    // float* k = s.k();
+    // float* v = s.v();
+    // void* kernelParams[] = {
+    //   &q,
+    //   &k,
+    //   &v,
+    //   (void*)&c.head_dim,
+    //   (void*)&c.n_heads,
+    //   (void*)&c.n_kv_heads,
+    //   &pos,
+    //   &kv_pos,
+    //   (void*)&c.rope_theta,
+    //   (void*)&c.rotary_dim,
+    //   &q,           // Q can be updated in-place
+    //   &kb,
+    //   &vb
+    // };
+    // params.kernelParams = kernelParams;
+    // params.extra = nullptr;
+    // s.graph().add_or_update_kernel_node(fmt::format("{}:fused_rope_and_cache_update", _layer_i), params, s.stream());
   }
+  // TODO: update me for MLA
   if (kv_sink > 0) {
     // Sink tokens remain untouched while the rest of the KV cache is incrementally 
     // replaced in ring order, but sink i must always be positioned (max_seq_len - i)
     // away from current timestep. Hence, each forward pass, rotate sink tokens 
     // forward by 1. See https://arxiv.org/abs/2309.17453 for more.
-    int threads_needed = (kv_dim + 1) / 2;  // Each thread handles 2 elements
-    int num_blocks = (threads_needed + max_threads_per_block - 1) / max_threads_per_block;
-    cudaKernelNodeParams params;
-    params.blockDim = {static_cast<unsigned int>(max_threads_per_block), 1, 1};
-    params.gridDim = {static_cast<unsigned int>(num_blocks), 1, 1};
-    params.sharedMemBytes = 0;
-    params.func = reinterpret_cast<void*>(rotate_sink_tokens);
-    void* kernelParams[] = {
-      &kb,
-      &kv_sink,
-      &kv_dim,
-      (void*)&c.head_dim,
-      (void*)&c.rope_theta,
-      (void*)&c.rotary_dim
-    };
-    params.kernelParams = kernelParams;
-    params.extra = nullptr;
-    s.graph().add_or_update_kernel_node(fmt::format("{}:rotate_sink_tokens", _layer_i), params, s.stream());
+    // int threads_needed = (kv_dim + 1) / 2;  // Each thread handles 2 elements
+    // int num_blocks = (threads_needed + max_threads_per_block - 1) / max_threads_per_block;
+    // cudaKernelNodeParams params;
+    // params.blockDim = {static_cast<unsigned int>(max_threads_per_block), 1, 1};
+    // params.gridDim = {static_cast<unsigned int>(num_blocks), 1, 1};
+    // params.sharedMemBytes = 0;
+    // params.func = reinterpret_cast<void*>(rotate_sink_tokens);
+    // void* kernelParams[] = {
+    //   &kb,
+    //   &kv_sink,
+    //   &kv_dim,
+    //   (void*)&c.head_dim,
+    //   (void*)&c.rope_theta,
+    //   (void*)&c.rotary_dim
+    // };
+    // params.kernelParams = kernelParams;
+    // params.extra = nullptr;
+    // s.graph().add_or_update_kernel_node(fmt::format("{}:rotate_sink_tokens", _layer_i), params, s.stream());
   }
   
   // multihead attention: dot products and softmax

@@ -40,8 +40,6 @@ void Config::from_yalm(YALMData& yalm, int context) {
   }
 
   rope_theta = std::stof(yalm.metadata.at("rope_theta").get<std::string>());
-  rotary_dim = std::stoi(yalm.metadata.at("rotary_dim").get<std::string>());
-
   norm_eps = std::stof(yalm.metadata.value("norm_eps", "1e-5"));
 
   std::string act_str = yalm.metadata.value("act_type", "gelu");
@@ -62,7 +60,6 @@ void Config::from_yalm(YALMData& yalm, int context) {
     norm_type = LayerNormType::RMSNorm;
   }
 
-  qkv_clip = yalm.metadata.contains("qkv_clip") ? std::stof(yalm.metadata.at("qkv_clip").get<std::string>()) : FLT_MAX;
   first_k_dense_replace = yalm.metadata.contains("first_k_dense_replace") ? 
     std::stoi(yalm.metadata.at("first_k_dense_replace").get<std::string>()) : 0;
 
