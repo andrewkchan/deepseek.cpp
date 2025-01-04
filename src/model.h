@@ -96,7 +96,7 @@ struct InferenceState {
   float* xb(int head) const { return _xb + _config->head_dim * head; }
   // TODO: do we need xb2?
   float* xb2() const { return _xb2; }
-  float* xb2(int head) const { return _xb2 + _config->head_dim * head; }
+  float* xb2(int head, int head_size) const { return _xb2 + head_size * head; }
   float* hb() const { return _hb; }
   float* hb2() const { return _hb2; }
   float* q() const { return _q; }
@@ -138,7 +138,7 @@ private:
   // current activations
   float* _x = nullptr;         // (dim,) - latest activation
   float* _xb = nullptr;        // (dim,) - activation inside a residual branch
-  float* _xb2 = nullptr;       // (dim,) - activation inside a residual branch (second slot)
+  float* _xb2 = nullptr;       // (max{dim, n_kv_heads * v_head_dim},) - activation inside a residual branch (second slot)
   float* _hb = nullptr;        // (hidden_dim,) - buffer for hidden dimension in feedforward network
   float* _hb2 = nullptr;       // (hidden_dim,) - buffer for hidden dimension in feedforward network (second slot)
   float* _q = nullptr;         // (n_heads * head_dim,) - query vectors for latest timestamp
@@ -331,6 +331,7 @@ void attn(
   f16_t* kh,      // (kv_len, n_kv_heads, head_dim) - buffer containing key vectors of the sequence for all KV heads
   f16_t* vh,      // (kv_len, n_kv_heads, head_dim) - buffer containing value vectors of the sequence for all KV heads
   int head_dim,   // size of the "key-space"
+  int v_head_dim, // size of the "value-space"
   int n_kv_heads, // number of kv heads, can be < n_heads (1 is MultiQueryAttention, >1 is GroupedQueryAttention)
   int kv_len      // number of tokens of the sequence we will attend over
 );
@@ -341,8 +342,9 @@ void mha_cpu(
   f16_t* kb,    // (max_seq_len, n_kv_heads, head_dim)
   f16_t* vb,    // (max_seq_len, n_kv_heads, head_dim)
   float* q,     // (n_heads, head_dim)
-  int head_dim, int kv_len, int max_seq_len, int n_heads, int n_kv_heads
+  int head_dim, int v_head_dim, int kv_len, int max_seq_len, int n_heads, int n_kv_heads
 );
+// TODO update me for MLA
 void mha_cuda(
   float* xout,  // (n_heads, head_dim)
   float* att,   // (n_heads, max_seq_len)

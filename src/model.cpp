@@ -229,7 +229,7 @@ Block::Block(
   }
 
   _key_cache = new f16_t[config->max_seq_len * config->n_kv_heads * config->head_dim]();
-  _value_cache = new f16_t[config->max_seq_len * config->n_kv_heads * config->head_dim]();
+  _value_cache = new f16_t[config->max_seq_len * config->n_kv_heads * config->v_head_dim]();
 }
 
 Block::~Block() {
@@ -278,7 +278,7 @@ void Block::cuda() {
 
   // kv cache
   _key_cache = static_cast<f16_t*>(upload_cuda(_key_cache, _config->max_seq_len * _config->n_kv_heads * _config->head_dim * sizeof(f16_t)));
-  _value_cache = static_cast<f16_t*>(upload_cuda(_value_cache, _config->max_seq_len * _config->n_kv_heads * _config->head_dim * sizeof(f16_t)));
+  _value_cache = static_cast<f16_t*>(upload_cuda(_value_cache, _config->max_seq_len * _config->n_kv_heads * _config->v_head_dim * sizeof(f16_t)));
 }
 
 void Block::block(
@@ -329,7 +329,7 @@ InferenceState::InferenceState(const std::shared_ptr<Config> config):
   assert(config);
   _x = new float[config->dim]();
   _xb = new float[config->dim]();
-  _xb2 = new float[config->dim]();
+  _xb2 = new float[std::max(config->dim, config->n_kv_heads * config->v_head_dim)]();
   _hb = new float[config->hidden_dim]();
   _hb2 = new float[config->hidden_dim]();
   _q = new float[config->n_heads * config->head_dim]();
@@ -398,7 +398,7 @@ void InferenceState::cuda() {
   init_cuda_stream(&_stream);
   _x = static_cast<float*>(upload_cuda(_x, _config->dim * sizeof(float)));
   _xb = static_cast<float*>(upload_cuda(_xb, _config->dim * sizeof(float)));
-  _xb2 = static_cast<float*>(upload_cuda(_xb2, _config->dim * sizeof(float)));
+  _xb2 = static_cast<float*>(upload_cuda(_xb2, std::max(_config->dim, _config->n_kv_heads * _config->v_head_dim) * sizeof(float)));
   _hb = static_cast<float*>(upload_cuda(_hb, _config->hidden_dim * sizeof(float)));
   _hb2 = static_cast<float*>(upload_cuda(_hb2, _config->hidden_dim * sizeof(float)));
   _q = static_cast<float*>(upload_cuda(_q, _config->n_heads * _config->head_dim * sizeof(float)));

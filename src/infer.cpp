@@ -243,21 +243,22 @@ static void rope(float* buf, f16_t* vec, int d, int head_dim, int pos, float the
 
 // Compute next value in a sequence for a single causal self-attention head.
 void attn(
-  float* xout,    // (dim,) - output vector
+  float* xout,    // (n_kv_heads * v_head_dim,) - output vector
   float* atth,    // (kv_len,) - scratch space to hold attention scores of the sequence
   float* qh,      // (head_dim,) - query vector for this head
   f16_t* kh,      // (kv_len, n_kv_heads, head_dim) - buffer containing key vectors of the sequence for all KV heads
-  f16_t* vh,      // (kv_len, n_kv_heads, head_dim) - buffer containing value vectors of the sequence for all KV heads
+  f16_t* vh,      // (kv_len, n_kv_heads, v_head_dim) - buffer containing value vectors of the sequence for all KV heads
   int head_dim,   // size of the "key-space"
+  int v_head_dim, // size of the "value-space"
   int n_kv_heads, // number of kv heads, can be < n_heads (1 is MultiQueryAttention, >1 is GroupedQueryAttention)
   int kv_len      // number of tokens of the sequence we will attend over
 ) {
-  int kv_stride = n_kv_heads * head_dim; // stride per token in this kv head
+  int k_stride = n_kv_heads * head_dim; // stride per token in this k head
   // calculate attention scores as dot products of q and k
   for (int t = 0; t < kv_len; ++t) {
     float score = 0.0f;
     for (int i = 0; i < head_dim; ++i) {
-      score += qh[i] * half_to_float(kh[t * kv_stride + i]);
+      score += qh[i] * half_to_float(kh[t * k_stride + i]);
     }
     score /= sqrtf(head_dim);
     atth[t] = score;
@@ -266,11 +267,12 @@ void attn(
   // softmax the scores to get attention weights over [0..kv_len)
   softmax(atth, atth, kv_len);
 
+  int v_stride = n_kv_heads * v_head_dim; // stride per token in this v head
   // mix values with attention weights
-  for (int i = 0; i < head_dim; ++i) {
+  for (int i = 0; i < v_head_dim; ++i) {
     float vi = 0.0f;
     for (int t = 0; t < kv_len; ++t) {
-      vi += atth[t] * half_to_float(vh[t * kv_stride + i]);
+      vi += atth[t] * half_to_float(vh[t * v_stride + i]);
     }
     xout[i] = vi;
   }
@@ -370,11 +372,11 @@ void Block::_block_cpu(
     int v_head_offset = (h / q_per_kv_head) * c.v_head_dim;
     f16_t* kh = kb + k_head_offset;
     f16_t* vh = vb + v_head_offset;
-    attn(s.xb2(h), s.att(h), s.q(h), kh, vh, c.head_dim, c.n_kv_heads, kv_len);
+    attn(s.xb2(h, c.v_head_dim), s.att(h), s.q(h), kh, vh, c.head_dim, c.v_head_dim, c.n_kv_heads, kv_len);
   }
 
   // final matmul to get output of the attention, using `hb` as temp storage
-  matmul(s.hb(), s.xb2(), wo<T>(), q_dim, c.dim);
+  matmul(s.hb(), s.xb2(), wo<T>(), c.n_kv_heads * c.v_head_dim, c.dim);
 
   // residual connection back into x
   for (int i = 0; i < c.dim; ++i) {
@@ -481,19 +483,20 @@ void mha_cpu(
   f16_t* kb,    // (max_seq_len, n_kv_heads, head_dim)
   f16_t* vb,    // (max_seq_len, n_kv_heads, head_dim)
   float* q,     // (n_heads, head_dim)
-  int head_dim, int kv_len, int max_seq_len, int n_heads, int n_kv_heads
+  int head_dim, int v_head_dim, int kv_len, int max_seq_len, int n_heads, int n_kv_heads
 ) {
   // Multihead attention. Iterate over all heads.
   int q_per_kv_head = n_heads / n_kv_heads; // query heads per kv head (for MultiQueryAttention/GroupedQueryAttention)
   int h;
 #pragma omp parallel for private(h)
   for (h = 0; h < n_heads; h++) {
-    int kv_head_offset = (h / q_per_kv_head) * head_dim;
-    f16_t* kh = kb + kv_head_offset;
-    f16_t* vh = vb + kv_head_offset;
+    int k_head_offset = (h / q_per_kv_head) * head_dim;
+    int v_head_offset = (h / q_per_kv_head) * v_head_dim;
+    f16_t* kh = kb + k_head_offset;
+    f16_t* vh = vb + v_head_offset;
     attn(
       xout + head_dim * h, att + max_seq_len * h, q + head_dim * h, 
-      kh, vh, head_dim, n_kv_heads, kv_len
+      kh, vh, head_dim, v_head_dim, n_kv_heads, kv_len
     );
   }
 }
