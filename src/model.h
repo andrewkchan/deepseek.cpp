@@ -104,6 +104,7 @@ struct InferenceState {
   float* kv_a() const { return _kv_a; }
   float* kv_b() const { return _kv_b; }
   float* kv_b(int head) const { return _kv_b + (_config->head_dim - _config->qk_rope_head_dim + _config->v_head_dim) * head; }
+  float* ropebuf() const { return _ropebuf; }
   float* k() const { return _k; }
   float* k(int head) const { return _k + _config->head_dim * head; }
   float* v() const { return _v; }
@@ -143,6 +144,7 @@ private:
   float* _q = nullptr;         // (n_heads * head_dim,) - query vectors for latest timestamp
   float* _kv_a = nullptr;      // (kv_lora_rank + qk_rope_head_dim,) - compressed (latent) key-value vector for latest timestamp
   float* _kv_b = nullptr;      // (n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim),) - uncompressed key-value vector for latest timestamp
+  float* _ropebuf = nullptr;   // (n_kv_heads * qk_rope_head_dim,) - buffer for rope
   float* _k = nullptr;         // (n_kv_heads * head_dim,) - key vectors for latest timestamp
   float* _v = nullptr;         // (n_kv_heads * v_head_dim,) - value vectors for latest timestamp
   float* _att = nullptr;       // (n_heads, seq_len) - buffer for attention scores

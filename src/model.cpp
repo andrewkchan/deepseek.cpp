@@ -335,6 +335,7 @@ InferenceState::InferenceState(const std::shared_ptr<Config> config):
   _q = new float[config->n_heads * config->head_dim]();
   _kv_a = new float[config->kv_lora_rank + config->qk_rope_head_dim]();
   _kv_b = new float[config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim)]();
+  _ropebuf = new float[config->n_kv_heads * config->qk_rope_head_dim]();
   _k = new float[config->n_kv_heads * config->head_dim]();
   _v = new float[config->n_kv_heads * config->v_head_dim]();
   _att = new float[config->n_heads * config->max_seq_len]();
@@ -356,6 +357,7 @@ InferenceState::~InferenceState() {
     delete[] _q;
     delete[] _kv_a;
     delete[] _kv_b;
+    delete[] _ropebuf;
     delete[] _k;
     delete[] _v;
     delete[] _att;
@@ -374,6 +376,7 @@ InferenceState::~InferenceState() {
     free_cuda(_q);
     free_cuda(_kv_a);
     free_cuda(_kv_b);
+    free_cuda(_ropebuf);
     free_cuda(_k);
     free_cuda(_v);
     free_cuda(_att);
@@ -401,6 +404,7 @@ void InferenceState::cuda() {
   _q = static_cast<float*>(upload_cuda(_q, _config->n_heads * _config->head_dim * sizeof(float)));
   _kv_a = static_cast<float*>(upload_cuda(_kv_a, (_config->kv_lora_rank + _config->qk_rope_head_dim) * sizeof(float)));
   _kv_b = static_cast<float*>(upload_cuda(_kv_b, _config->n_kv_heads * (_config->head_dim-_config->qk_rope_head_dim+_config->v_head_dim) * sizeof(float)));
+  _ropebuf = static_cast<float*>(upload_cuda(_ropebuf, _config->n_kv_heads * _config->qk_rope_head_dim * sizeof(float)));
   _k = static_cast<float*>(upload_cuda(_k, _config->n_kv_heads * _config->head_dim * sizeof(float)));
   _v = static_cast<float*>(upload_cuda(_v, _config->n_kv_heads * _config->v_head_dim * sizeof(float)));
   _att = static_cast<float*>(upload_cuda(_att, _config->n_heads * _config->max_seq_len * sizeof(float)));

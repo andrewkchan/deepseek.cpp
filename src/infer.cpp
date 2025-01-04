@@ -198,34 +198,46 @@ inline float clip(float x, float v) {
   return x < -v ? -v : (x > v ? v : x);
 }
 
-static void rope(float* vec, int d, int head_dim, int pos, float theta) {
+static void rope(float* buf, float* vec, int d, int head_dim, int pos, float theta) {
+  // For some reason, DeepSeek-V2 was trained using rope output 
+  // layout transposed compared to the input. This means we need a buffer
+  // to hold intermediate results.
   assert(d % 2 == 0);
-  for (int i = 0; i < d/2; i++) {
-    int j_head = (i * 2) % head_dim;
+  for (int i = 0; i < d; i += 2) {
+    int j_head = i % head_dim;
     float freq = 1.0f / powf(theta, (float)j_head / (float)head_dim);
     float val = pos * freq;
     float fcr = cosf(val);
     float fci = sinf(val);
 
     float v0 = vec[i];
-    float v1 = vec[i + d/2];
-    vec[i] = v0 * fcr - v1 * fci;
-    vec[i + d/2] = v0 * fci + v1 * fcr;
+    float v1 = vec[i + 1];
+    buf[i/2] = v0 * fcr - v1 * fci;
+    buf[i/2 + d/2] = v0 * fci + v1 * fcr;
+  }
+  for (int i = 0; i < d; i++) {
+    vec[i] = buf[i];
   }
 }
-static void rope(f16_t* vec, int d, int head_dim, int pos, float theta) {
+static void rope(float* buf, f16_t* vec, int d, int head_dim, int pos, float theta) {
+  // For some reason, DeepSeek-V2 was trained using rope output 
+  // layout transposed compared to the input. This means we need a buffer
+  // to hold intermediate results.
   assert(d % 2 == 0);
-  for (int i = 0; i < d/2; i++) {
-    int j_head = (i * 2) % head_dim;
+  for (int i = 0; i < d; i += 2) {
+    int j_head = i % head_dim;
     float freq = 1.0f / powf(theta, (float)j_head / (float)head_dim);
     float val = pos * freq;
     float fcr = cosf(val);
     float fci = sinf(val);
 
     float v0 = half_to_float(vec[i]);
-    float v1 = half_to_float(vec[i + d/2]);
-    vec[i] = float_to_half(v0 * fcr - v1 * fci);
-    vec[i + d/2] = float_to_half(v0 * fci + v1 * fcr);
+    float v1 = half_to_float(vec[i + 1]);
+    buf[i/2] = v0 * fcr - v1 * fci;
+    buf[i/2 + d/2] = v0 * fci + v1 * fcr;
+  }
+  for (int i = 0; i < d; i++) {
+    vec[i] = float_to_half(buf[i]);
   }
 }
 
@@ -296,11 +308,11 @@ void Block::_block_cpu(
   // Apply RoPE positional encoding to the PE chunks of q and kv_a
   int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
   for (int h = 0; h < c.n_heads; h++) {
-    rope(s.q(h) + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+    rope(s.ropebuf(), s.q(h) + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
   }
   int kv_pe_offset = c.kv_lora_rank;
   float* k_rope = s.kv_a() + kv_pe_offset;
-  rope(k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+  rope(s.ropebuf(), k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
   // rms norm to non-pe chunk of kv_a (compressed latent kv)
   rmsnorm(s.kv_a(), s.kv_a(), rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
   // un-compress the latent kv via multiplication with wkv_b
@@ -343,7 +355,7 @@ void Block::_block_cpu(
     int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
     for (int h = 0; h < c.n_heads; h++) {
       f16_t* kh = key + h * c.head_dim;
-      rope(kh + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+      rope(s.ropebuf(), kh + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
     }
   }
 
