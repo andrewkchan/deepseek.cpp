@@ -65,10 +65,11 @@ class Metadata:
       self.moe_intermediate_size = config["moe_intermediate_size"]
       self.routed_scaling_factor = config["routed_scaling_factor"]
       self.norm_topk_prob = config["norm_topk_prob"]
-      assert config.get("scoring_func", "softmax") == "softmax" # TODO: support for Deepseek v3
-      assert config.get("scoring_func", "softmax") == "softmax" # TODO: support for Deepseek v3
+      self.scoring_func = config["scoring_func"]
+      assert self.scoring_func == "softmax" # TODO: support for Deepseek v3
       self.topk_group = config["topk_group"]
-      assert config["topk_method"] != "noaux_tc" # TODO: support for Deepseek v3
+      self.topk_method = config["topk_method"]
+      assert self.topk_method != "noaux_tc" # TODO: support for Deepseek v3
   
   def to_dict(self):
     result = {}
@@ -101,7 +102,9 @@ class Metadata:
       result["moe_intermediate_size"] = str(self.moe_intermediate_size)
       result["routed_scaling_factor"] = str(self.routed_scaling_factor)
       result["norm_topk_prob"] = str(self.norm_topk_prob)
+      result["scoring_func"] = str(self.scoring_func)
       result["topk_group"] = str(self.topk_group)
+      result["topk_method"] = str(self.topk_method)
     return result
 
 # this is a horrible gpt-2 unicode byte encoder hack from https://github.com/openai/gpt-2/blob/master/src/encoder.py#L9
