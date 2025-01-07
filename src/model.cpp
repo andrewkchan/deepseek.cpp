@@ -30,6 +30,7 @@ void Config::from_yalm(YALMData& yalm, int context) {
   topk_group = yalm.metadata.contains("topk_group") ? std::stoi(yalm.metadata.at("topk_group").get<std::string>()) : 0;
   // multi-latent attention
   kv_lora_rank = yalm.metadata.contains("kv_lora_rank") ? std::stoi(yalm.metadata.at("kv_lora_rank").get<std::string>()) : 0;
+  q_lora_rank = yalm.metadata.contains("q_lora_rank") ? std::stoi(yalm.metadata.at("q_lora_rank").get<std::string>()) : 0;
   qk_nope_head_dim = yalm.metadata.contains("qk_nope_head_dim") ? std::stoi(yalm.metadata.at("qk_nope_head_dim").get<std::string>()) : 0;
   qk_rope_head_dim = yalm.metadata.contains("qk_rope_head_dim") ? std::stoi(yalm.metadata.at("qk_rope_head_dim").get<std::string>()) : 0;
   v_head_dim = yalm.metadata.contains("v_head_dim") ? std::stoi(yalm.metadata.at("v_head_dim").get<std::string>()) : 0;
@@ -143,9 +144,12 @@ Block::Block(
   int layer_i,
   const std::shared_ptr<Config> config,
   const Tensor* rms_att_weight,
+  const Tensor* rms_q_a_weight,
   const Tensor* rms_kv_a_weight,
   const Tensor* rms_ffn_weight,
   const Tensor* wq,
+  const Tensor* wq_a,
+  const Tensor* wq_b,
   const Tensor* wkv_a,
   const Tensor* wkv_b,
   const Tensor* wo,
@@ -174,6 +178,9 @@ Block::Block(
   _rms_att_weight = static_cast<float*>(check_tensor(
     rms_att_weight, DType::F32, {config->dim, 0, 0, 0}
   ));
+  _rms_q_a_weight = static_cast<float*>(check_tensor(
+    rms_q_a_weight, DType::F32, {config->q_lora_rank, 0, 0, 0}
+  ));
   _rms_kv_a_weight = static_cast<float*>(check_tensor(
     rms_kv_a_weight, DType::F32, {config->kv_lora_rank, 0, 0, 0}
   ));
@@ -181,9 +188,18 @@ Block::Block(
     rms_ffn_weight, DType::F32, {config->dim, 0, 0, 0}
   ));
 
-  _wq = check_tensor(
-    wq, config->weight_dtype, {config->n_heads * config->head_dim, config->dim, 0, 0}
-  );
+  if (config->q_lora_rank > 0) {
+    _wq_a = check_tensor(
+      wq_a, config->weight_dtype, {config->q_lora_rank, config->dim, 0, 0}
+    );
+    _wq_b = check_tensor(
+      wq_b, config->weight_dtype, {config->n_heads * config->head_dim, config->q_lora_rank, 0, 0}
+    );
+  } else {
+    _wq = check_tensor(
+      wq, config->weight_dtype, {config->n_heads * config->head_dim, config->dim, 0, 0}
+    );
+  }
   _wkv_a = check_tensor(
     wkv_a, config->weight_dtype, {config->kv_lora_rank + config->qk_rope_head_dim, config->dim, 0, 0}
   );
@@ -252,11 +268,19 @@ void Block::cuda() {
   size_t weight_size = dtype_size(_config->weight_dtype);
   // norms
   _rms_att_weight = static_cast<float*>(upload_cuda(_rms_att_weight, _config->dim * sizeof(float)));
+  if (_config->q_lora_rank > 0) {
+    _rms_q_a_weight = static_cast<float*>(upload_cuda(_rms_q_a_weight, _config->q_lora_rank * sizeof(float)));
+  }
   _rms_kv_a_weight = static_cast<float*>(upload_cuda(_rms_kv_a_weight, _config->kv_lora_rank * sizeof(float)));
   _rms_ffn_weight = static_cast<float*>(upload_cuda(_rms_ffn_weight, _config->dim * sizeof(float)));
 
   // self-attention
-  _wq = upload_cuda(_wq, _config->n_heads * _config->head_dim * _config->dim * weight_size);
+  if (_config->q_lora_rank > 0) {
+    _wq_a = upload_cuda(_wq_a, _config->q_lora_rank * _config->dim * weight_size);
+    _wq_b = upload_cuda(_wq_b, _config->n_heads * _config->head_dim * _config->q_lora_rank * weight_size);
+  } else {
+    _wq = upload_cuda(_wq, _config->n_heads * _config->head_dim * _config->dim * weight_size);
+  }
   _wkv_a = upload_cuda(_wkv_a, (_config->kv_lora_rank + _config->qk_rope_head_dim) * _config->dim * weight_size);
   _wkv_b = upload_cuda(_wkv_b, _config->n_kv_heads * (_config->head_dim-_config->qk_rope_head_dim+_config->v_head_dim) * _config->kv_lora_rank * weight_size);
   _wo = upload_cuda(_wo, _config->dim * _config->n_heads * _config->head_dim * weight_size);
@@ -334,6 +358,9 @@ InferenceState::InferenceState(const std::shared_ptr<Config> config):
   _xb2 = new float[std::max(config->dim, config->n_kv_heads * config->v_head_dim)]();
   _hb = new float[config->hidden_dim]();
   _hb2 = new float[config->hidden_dim]();
+  if (config->q_lora_rank > 0) {
+    _q_a = new float[config->q_lora_rank]();
+  }
   _q = new float[config->n_heads * config->head_dim]();
   _kv_a = new float[config->kv_lora_rank + config->qk_rope_head_dim]();
   _kv_b = new float[config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim)]();
@@ -434,9 +461,12 @@ Model::Model(YALMData& yalm, int context) {
       i,
       config,
       get_tensor(yalm, fmt::format("model.layers.{}.attn.norm.weight", i)),
+      config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.q_a_norm.weight", i)) : nullptr,
       get_tensor(yalm, fmt::format("model.layers.{}.attn.kv_a_norm.weight", i)),
       get_tensor(yalm, fmt::format("model.layers.{}.mlp.norm.weight", i)),
-      get_tensor(yalm, fmt::format("model.layers.{}.attn.wq.weight", i)),
+      config->q_lora_rank == 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq.weight", i)) : nullptr,
+      config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_a.weight", i)) : nullptr,
+      config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_b.weight", i)) : nullptr,
       get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_a.weight", i)),
       get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_b.weight", i)),
       get_tensor(yalm, fmt::format("model.layers.{}.attn.wo.weight", i)),

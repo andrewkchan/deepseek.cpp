@@ -52,7 +52,7 @@ class Metadata:
 
       # multi-latent attention
       self.kv_lora_rank = config["kv_lora_rank"]
-      assert config.get("q_lora_rank", None) is None # TODO: support for Deepseek v3, DeepSeek v2 base
+      self.q_lora_rank = config["q_lora_rank"]
       self.qk_nope_head_dim = config["qk_nope_head_dim"]
       self.qk_rope_head_dim = config["qk_rope_head_dim"]
       assert config.get("quantization_config", None) is None # TODO: support for Deepseek v3
@@ -92,6 +92,7 @@ class Metadata:
       result["first_k_dense_replace"] = str(self.first_k_dense_replace)
       # multi-latent attention
       result["kv_lora_rank"] = str(self.kv_lora_rank)
+      result["q_lora_rank"] = str(self.q_lora_rank)
       result["qk_nope_head_dim"] = str(self.qk_nope_head_dim)
       result["qk_rope_head_dim"] = str(self.qk_rope_head_dim)
       result["v_head_dim"] = str(self.v_head_dim)
@@ -185,7 +186,12 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings):
     tensors[f"model.layers.{l}.attn.wkv_a.weight"] = conv(weights[f"model.layers.{l}.self_attn.kv_a_proj_with_mqa.weight"])
     tensors[f"model.layers.{l}.attn.wkv_b.weight"] = conv(weights[f"model.layers.{l}.self_attn.kv_b_proj.weight"])
     tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.o_proj.weight"])
-    tensors[f"model.layers.{l}.attn.wq.weight"] = conv(weights[f"model.layers.{l}.self_attn.q_proj.weight"])
+    if metadata.q_lora_rank > 0:
+      tensors[f"model.layers.{l}.attn.wq_a.weight"] = conv(weights[f"model.layers.{l}.self_attn.q_a_proj.weight"])  
+      tensors[f"model.layers.{l}.attn.wq_b.weight"] = conv(weights[f"model.layers.{l}.self_attn.q_b_proj.weight"])
+      tensors[f"model.layers.{l}.attn.q_a_norm.weight"] = weights[f"model.layers.{l}.self_attn.q_a_layernorm.weight"].float()
+    else:
+      tensors[f"model.layers.{l}.attn.wq.weight"] = conv(weights[f"model.layers.{l}.self_attn.q_proj.weight"])
 
     tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
 

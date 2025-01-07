@@ -312,7 +312,18 @@ void Block::_block_cpu(
   int q_dim = c.n_heads * c.head_dim;
 
   // qkv matmuls for this position
-  matmul(s.q(), s.xb(), wq<T>(), c.dim, q_dim);
+  if (c.q_lora_rank > 0) {
+    matmul(s.q_a(), s.xb(), wq_a<T>(), c.dim, c.q_lora_rank);
+    switch (c.norm_type) {
+      case LayerNormType::RMSNorm: {
+        rmsnorm(s.q_a(), s.q_a(), rms_q_a_weight(), c.q_lora_rank, c.norm_eps);
+        break;
+      }
+    }
+    matmul(s.q(), s.q_a(), wq_b<T>(), c.q_lora_rank, q_dim);
+  } else {
+    matmul(s.q(), s.xb(), wq<T>(), c.dim, q_dim);
+  }
   matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim);
 
   // Apply RoPE positional encoding to the PE chunks of q and kv_a

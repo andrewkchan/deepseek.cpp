@@ -61,6 +61,7 @@ struct Config {
   int topk_group;
   // multi-latent attention
   int kv_lora_rank;
+  int q_lora_rank;
   int qk_nope_head_dim;
   int qk_rope_head_dim;
   int v_head_dim;
@@ -101,6 +102,7 @@ struct InferenceState {
   float* xb2(int head, int head_size) const { return _xb2 + head_size * head; }
   float* hb() const { return _hb; }
   float* hb2() const { return _hb2; }
+  float* q_a() const { return _q_a; }
   float* q() const { return _q; }
   float* q(int head) const { return _q + _config->head_dim * head; }
   float* kv_a() const { return _kv_a; }
@@ -143,6 +145,7 @@ private:
   float* _xb2 = nullptr;       // (max{dim, n_kv_heads * v_head_dim},) - activation inside a residual branch (second slot)
   float* _hb = nullptr;        // (hidden_dim,) - buffer for hidden dimension in feedforward network
   float* _hb2 = nullptr;       // (hidden_dim,) - buffer for hidden dimension in feedforward network (second slot)
+  float* _q_a = nullptr;       // (q_lora_rank,) - compressed (latent) query vector for latest timestamp
   float* _q = nullptr;         // (n_heads * head_dim,) - query vectors for latest timestamp
   float* _kv_a = nullptr;      // (kv_lora_rank + qk_rope_head_dim,) - compressed (latent) key-value vector for latest timestamp
   float* _kv_b = nullptr;      // (n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim),) - uncompressed key-value vector for latest timestamp
@@ -167,9 +170,12 @@ struct Block {
     int layer_i,
     const std::shared_ptr<Config> config,
     const Tensor* rms_att_weight,
+    const Tensor* rms_q_a_weight,
     const Tensor* rms_kv_a_weight,
     const Tensor* rms_ffn_weight,
     const Tensor* wq,
+    const Tensor* wq_a,
+    const Tensor* wq_b,
     const Tensor* wkv_a,
     const Tensor* wkv_b,
     const Tensor* wo,
@@ -185,9 +191,14 @@ struct Block {
 
   float* rms_att_weight() const { return _rms_att_weight; }
   float* rms_ffn_weight() const { return _rms_ffn_weight; }
+  float* rms_q_a_weight() const { return _rms_q_a_weight; }
   float* rms_kv_a_weight() const { return _rms_kv_a_weight; }
   template <typename T>
   T* wq() const { return static_cast<T*>(_wq); }
+  template <typename T>
+  T* wq_a() const { return static_cast<T*>(_wq_a); }
+  template <typename T>
+  T* wq_b() const { return static_cast<T*>(_wq_b); }
   template <typename T>
   T* wkv_a() const { return static_cast<T*>(_wkv_a); }
   template <typename T>
@@ -252,11 +263,14 @@ private:
 
   // weights for norms
   float* _rms_att_weight = nullptr; // (dim) rmsnorm weights
+  float* _rms_q_a_weight = nullptr; // (q_lora_rank) rmsnorm weights
   float* _rms_kv_a_weight = nullptr; // (kv_lora_rank + qk_rope_head_dim)
   float* _rms_ffn_weight = nullptr; // (dim)
 
   // weights for self-attention matmuls
   void* _wq = nullptr; // (n_heads * head_dim, dim)
+  void* _wq_a = nullptr; // (q_lora_rank, dim)
+  void* _wq_b = nullptr; // (n_heads * head_dim, q_lora_rank)
   void* _wkv_a = nullptr; // (kv_lora_rank + qk_rope_head_dim, dim)
   void* _wkv_b = nullptr; // (n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim), kv_lora_rank)
   void* _wo = nullptr; // (dim, n_heads * v_head_dim)
