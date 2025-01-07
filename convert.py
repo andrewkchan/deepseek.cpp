@@ -64,6 +64,7 @@ class Metadata:
       self.n_active_routed = config["num_experts_per_tok"]
       self.moe_intermediate_size = config["moe_intermediate_size"]
       self.routed_scaling_factor = config["routed_scaling_factor"]
+      self.n_group = config["n_group"]
       self.norm_topk_prob = config["norm_topk_prob"]
       self.scoring_func = config["scoring_func"]
       assert self.scoring_func == "softmax" # TODO: support for Deepseek v3
@@ -102,6 +103,7 @@ class Metadata:
       result["n_active_routed"] = str(self.n_active_routed)
       result["moe_intermediate_size"] = str(self.moe_intermediate_size)
       result["routed_scaling_factor"] = str(self.routed_scaling_factor)
+      result["n_group"] = str(self.n_group)
       result["norm_topk_prob"] = str(self.norm_topk_prob)
       result["scoring_func"] = str(self.scoring_func)
       result["topk_group"] = str(self.topk_group)

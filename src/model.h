@@ -20,6 +20,12 @@ enum class LayerNormType {
   RMSNorm,
 };
 
+enum class TopKMethod {
+  GREEDY,
+  GROUP_LIMITED_GREEDY,
+  NOAUX_TC,
+};
+
 enum class Device {
   CPU,
   CUDA,
@@ -57,8 +63,10 @@ struct Config {
   int n_active_routed;
   int moe_intermediate_size;
   float routed_scaling_factor;
+  int n_group;
   bool norm_topk_prob;
   int topk_group;
+  TopKMethod topk_method;
   // multi-latent attention
   int kv_lora_rank;
   int q_lora_rank;

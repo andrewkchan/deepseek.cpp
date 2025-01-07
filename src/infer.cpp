@@ -124,31 +124,82 @@ static void moe_gate(
   int n_routed_experts, 
   int n_active_routed, 
   bool norm_topk_prob,
-  float routed_scaling_factor
+  float routed_scaling_factor,
+  TopKMethod topk_method,
+  int n_group,
+  int topk_group
 ) {
   // Set moe_weights[:n_active_routed] to the weights of the top K experts.
   // Set active_experts[:n_active_routed] to the indices of the top K experts.
   softmax(x, x, n_routed_experts);
   
   // top k
-  assert(n_routed_experts <= 256);
-  std::array<uint8_t, 32> mask{};
   float wsum = 0.0f;
-  for (int k = 0; k < n_active_routed; ++k) {
-    int best = -1;
-    for (int j = 0; j < n_routed_experts; ++j) {
-      int mask_i = j / 8;
-      int mask_r = j % 8;
-      if ((mask[mask_i] & (1ull << mask_r)) == 0 && (best == -1 || x[j] > x[best])) {
-        best = j;
+  if (topk_method == TopKMethod::GREEDY) {
+    assert(n_routed_experts <= 256);
+    std::array<uint8_t, 32> mask{};
+    for (int k = 0; k < n_active_routed; ++k) {
+      int best = -1;
+      for (int j = 0; j < n_routed_experts; ++j) {
+        int mask_i = j / 8;
+        int mask_r = j % 8;
+        if ((mask[mask_i] & (1ull << mask_r)) == 0 && (best == -1 || x[j] > x[best])) {
+          best = j;
+        }
+      }
+
+      active_experts[k] = best;
+      wsum += x[active_experts[k]];
+      int best_mask_i = best / 8;
+      int best_mask_r = best % 8;
+      mask[best_mask_i] |= 1ull << best_mask_r;
+    }
+  } else if (topk_method == TopKMethod::GROUP_LIMITED_GREEDY) {
+    int group_size = n_routed_experts / n_group;
+    
+    // First pass: select topk_group within each group
+    std::array<uint8_t, 32> mask{};
+    
+    for (int g = 0; g < n_group; g++) {
+      // Select topk_group items from this group
+      for (int k = 0; k < topk_group; k++) {
+        int best = -1;
+        for (int j = g*group_size; j < (g+1)*group_size; j++) {
+          int mask_i = j / 8;
+          int mask_r = j % 8;
+          if ((mask[mask_i] & (1u << mask_r)) == 0 && x[j] > x[best]) {
+            best = j;
+          }
+        }
+        int best_mask_i = best / 8;
+        int best_mask_r = best % 8;
+        mask[best_mask_i] |= 1u << best_mask_r;
       }
     }
+    // Flip mask so that now we only look at the topk_group items in each group
+    for (int i = 0; i < 32; i++) {
+      mask[i] = ~mask[i];
+    }
+    
+    // Second pass: select top n_active_routed overall
+    for (int k = 0; k < n_active_routed; ++k) {
+      int best = -1;
+      for (int j = 0; j < n_routed_experts; ++j) {
+        int mask_i = j / 8;
+        int mask_r = j % 8;
+        if ((mask[mask_i] & (1ull << mask_r)) == 0 && (best == -1 || x[j] > x[best])) {
+          best = j;
+        }
+      }
 
-    active_experts[k] = best;
-    wsum += x[active_experts[k]];
-    int best_mask_i = best / 8;
-    int best_mask_r = best % 8;
-    mask[best_mask_i] |= 1ull << best_mask_r;
+      active_experts[k] = best;
+      wsum += x[active_experts[k]];
+      int best_mask_i = best / 8;
+      int best_mask_r = best % 8;
+      mask[best_mask_i] |= 1ull << best_mask_r;
+    }
+  } else if (topk_method == TopKMethod::NOAUX_TC) {
+    assert(false && "TODO: implement noaux_tc");
   }
 
   if (!norm_topk_prob) {
@@ -415,7 +466,8 @@ void Block::_block_cpu(
     matmul(s.moe_weights(), s.xb(), moegate<T>(), c.dim, c.n_routed_experts);
     moe_gate(
       s.active_experts_weights(), s.active_experts(), s.moe_weights(), 
-      c.n_routed_experts, c.n_active_routed, c.norm_topk_prob, c.routed_scaling_factor
+      c.n_routed_experts, c.n_active_routed, c.norm_topk_prob, c.routed_scaling_factor,
+      c.topk_method, c.n_group, c.topk_group
     );
     for (int k = 0; k < c.n_active_routed; ++k) {
       int expert_index = s.active_experts()[k];
