@@ -56,6 +56,8 @@ struct Config {
   int n_routed_experts;
   int n_active_routed;
   int moe_intermediate_size;
+  float routed_scaling_factor;
+  bool norm_topk_prob;
   int topk_group;
   // multi-latent attention
   int kv_lora_rank;

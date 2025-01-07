@@ -99,37 +99,63 @@ static void matmul(float* xout, float* x, f16_t* w, int n, int d) {
 #endif
 }
 
-static void moe_gate(float* moe_weights, int* active_experts, float* x, int n_routed_experts, int n_active_routed) {
-  // Set moe_weights[:n_active_routed] to the weights of the top K experts.
-  // Set active_experts[:n_active_routed] to the indices of the top K experts.
-
-  // get the max weight for later softmax computation
-  float max_val = -FLT_MAX;
-  for (int j = 0; j < n_routed_experts; ++j) {
-    if (x[j] > max_val) {
-      max_val = x[j];
+// Compute the softmax of an input vector `x` of length `size` and store it in `o`.
+static void softmax(float* o, float* x, int size) {
+  float score_max = -FLT_MAX;
+  for (int i = 0; i < size; ++i) {
+    if (x[i] > score_max) {
+      score_max = x[i];
     }
   }
+  float score_sum = 0.0f;
+  for (int i = 0; i < size; ++i) {
+    o[i] = expf(x[i] - score_max);
+    score_sum += o[i];
+  }
+  for (int i = 0; i < size; ++i) {
+    o[i] /= score_sum;
+  }
+}
+
+static void moe_gate(
+  float* moe_weights, 
+  int* active_experts, 
+  float* x, 
+  int n_routed_experts, 
+  int n_active_routed, 
+  bool norm_topk_prob,
+  float routed_scaling_factor
+) {
+  // Set moe_weights[:n_active_routed] to the weights of the top K experts.
+  // Set active_experts[:n_active_routed] to the indices of the top K experts.
+  softmax(x, x, n_routed_experts);
   
   // top k
-  uint64_t mask = 0;
+  assert(n_routed_experts <= 256);
+  std::array<uint8_t, 32> mask{};
   float wsum = 0.0f;
   for (int k = 0; k < n_active_routed; ++k) {
     int best = -1;
     for (int j = 0; j < n_routed_experts; ++j) {
-      if ((mask & (1ull << j)) == 0 && (best == -1 || x[j] > x[best])) {
+      int mask_i = j / 8;
+      int mask_r = j % 8;
+      if ((mask[mask_i] & (1ull << mask_r)) == 0 && (best == -1 || x[j] > x[best])) {
         best = j;
       }
     }
 
     active_experts[k] = best;
-    wsum += expf(x[active_experts[k]] - max_val);
-    mask |= 1ull << best;
+    wsum += x[active_experts[k]];
+    int best_mask_i = best / 8;
+    int best_mask_r = best % 8;
+    mask[best_mask_i] |= 1ull << best_mask_r;
   }
 
-  // normalize top k weights to obtain the softmax result
+  if (!norm_topk_prob) {
+    wsum = 1.0;
+  }
   for (int k = 0; k < n_active_routed; ++k) {
-    moe_weights[k] = expf(x[active_experts[k]] - max_val) / wsum;
+    moe_weights[k] = x[active_experts[k]] / wsum * routed_scaling_factor;
   }
 }
 
@@ -165,24 +191,6 @@ static void rmsnorm(float* o, float* x, float* weight, int size, float eps) {
     for (int i = 0; i < size; ++i) {
       o[i] = (x[i] - mean) * scale * weight[i];
     }
-  }
-}
-
-// Compute the softmax of an input vector `x` of length `size` and store it in `o`.
-static void softmax(float* o, float* x, int size) {
-  float score_max = -FLT_MAX;
-  for (int i = 0; i < size; ++i) {
-    if (x[i] > score_max) {
-      score_max = x[i];
-    }
-  }
-  float score_sum = 0.0f;
-  for (int i = 0; i < size; ++i) {
-    o[i] = expf(x[i] - score_max);
-    score_sum += o[i];
-  }
-  for (int i = 0; i < size; ++i) {
-    o[i] /= score_sum;
   }
 }
 
@@ -394,7 +402,10 @@ void Block::_block_cpu(
   if (c.n_routed_experts > 0 && moegate<T>() != nullptr) {
     // Block is a sparse MoE FFN layer
     matmul(s.moe_weights(), s.xb(), moegate<T>(), c.dim, c.n_routed_experts);
-    moe_gate(s.active_experts_weights(), s.active_experts(), s.moe_weights(), c.n_routed_experts, c.n_active_routed);
+    moe_gate(
+      s.active_experts_weights(), s.active_experts(), s.moe_weights(), 
+      c.n_routed_experts, c.n_active_routed, c.norm_topk_prob, c.routed_scaling_factor
+    );
     for (int k = 0; k < c.n_active_routed; ++k) {
       int expert_index = s.active_experts()[k];
       int expert_size = c.dim * c.moe_intermediate_size;

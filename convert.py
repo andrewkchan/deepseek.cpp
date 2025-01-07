@@ -63,8 +63,9 @@ class Metadata:
       self.n_routed_experts = config["n_routed_experts"]
       self.n_active_routed = config["num_experts_per_tok"]
       self.moe_intermediate_size = config["moe_intermediate_size"]
-      assert config.get("norm_topk_prob", False) == False # TODO: support for Deepseek v3
-      assert config.get("routed_scaling_factor", 1.0) == 1.0 # TODO: support for Deepseek v3
+      self.routed_scaling_factor = config["routed_scaling_factor"]
+      self.norm_topk_prob = config["norm_topk_prob"]
+      assert config.get("scoring_func", "softmax") == "softmax" # TODO: support for Deepseek v3
       assert config.get("scoring_func", "softmax") == "softmax" # TODO: support for Deepseek v3
       self.topk_group = config["topk_group"]
       assert config["topk_method"] != "noaux_tc" # TODO: support for Deepseek v3
@@ -98,6 +99,8 @@ class Metadata:
       result["n_routed_experts"] = str(self.n_routed_experts)
       result["n_active_routed"] = str(self.n_active_routed)
       result["moe_intermediate_size"] = str(self.moe_intermediate_size)
+      result["routed_scaling_factor"] = str(self.routed_scaling_factor)
+      result["norm_topk_prob"] = str(self.norm_topk_prob)
       result["topk_group"] = str(self.topk_group)
     return result
 
