@@ -191,9 +191,11 @@ Block::Block(
   _rms_att_weight = static_cast<float*>(check_tensor(
     rms_att_weight, DType::F32, {config->dim, 0, 0, 0}
   ));
-  _rms_q_a_weight = static_cast<float*>(check_tensor(
-    rms_q_a_weight, DType::F32, {config->q_lora_rank, 0, 0, 0}
-  ));
+  if (config->q_lora_rank > 0) {
+    _rms_q_a_weight = static_cast<float*>(check_tensor(
+      rms_q_a_weight, DType::F32, {config->q_lora_rank, 0, 0, 0}
+    ));
+  }
   _rms_kv_a_weight = static_cast<float*>(check_tensor(
     rms_kv_a_weight, DType::F32, {config->kv_lora_rank, 0, 0, 0}
   ));
