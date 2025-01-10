@@ -1,7 +1,10 @@
 This is an CPU-only inference implementation for the DeepSeek family of large language models written in C++, based on [Yet Another Language Model](https://github.com/andrewkchan/yalm). Support is as follows:
-- [X] DeepSeek-V2-Lite
-- [X] DeepSeek-V2
-- [ ] DeepSeek-V3
+
+| Model      | F8E5M2 | F8E4M3 | FP16 | BF16 | FP32 |
+| -----      | ------ | ------ | ---- | ---- | ---- |
+| DeepSeek-V2-Lite | WIP | WIP | ✅ | WIP | ✅ |
+| DeepSeek-V2 | WIP | WIP | ✅ | WIP | ✅ |
+| DeepSeek-V3 | WIP | WIP | - | - | - |
 
 # Instructions
 
