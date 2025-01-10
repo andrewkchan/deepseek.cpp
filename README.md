@@ -1,4 +1,4 @@
-This is an implementation of inference for the DeepSeek family of large language models written in C++, based on [Yet Another Language Model](https://github.com/andrewkchan/yalm). Support is as follows:
+This is an CPU-only inference implementation for the DeepSeek family of large language models written in C++, based on [Yet Another Language Model](https://github.com/andrewkchan/yalm). Support is as follows:
 - [X] DeepSeek-V2-Lite
 - [X] DeepSeek-V2
 - [ ] DeepSeek-V3
@@ -19,7 +19,7 @@ git clone https://github.com/andrewkchan/deepseek.cpp.git
 cd deepseek.cpp
 pip install -r requirements.txt
 python convert.py --dtype fp16 v2-lite-f16.dseek ../DeepSeek-V2-Lite/
-./build/main v2-lite-f16.dseek -i "What is a large language model?" -m c -d cpu -t 0.5
+./build/main v2-lite-f16.dseek -i "What is a large language model?" -m c -t 0.5
 ```
 
 # Usage
