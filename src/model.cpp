@@ -333,6 +333,9 @@ InferenceState::~InferenceState() {
     delete[] _xb2;
     delete[] _hb;
     delete[] _hb2;
+    if (_q_a != nullptr) {
+      delete[] _q_a;
+    }
     delete[] _q;
     delete[] _kv_a;
     delete[] _kv_b;
