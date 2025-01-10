@@ -16,7 +16,7 @@
 
 void error_usage() {
   fprintf(stderr, "Usage:   main <checkpoint> [options]\n");
-  fprintf(stderr, "Example: main model.yalm -i \"Q: What is the meaning of life?\"\n");
+  fprintf(stderr, "Example: main model.dseek -i \"Q: What is the meaning of life?\"\n");
   fprintf(stderr, "Options:\n");
   fprintf(stderr, "  -h Display this help message\n");
   fprintf(stderr, "  -d [cpu,cuda] which device to use (default - cuda)\n");
