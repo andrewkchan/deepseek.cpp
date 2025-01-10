@@ -3,7 +3,7 @@
 # - Normalizes the config to a common format in the header
 # - Combines any safetensors shards
 # - Reads the token vocabulary into a simpler format
-# - Performs quantization to fp8 if specified
+# - Performs quantization if specified
 
 import argparse
 import os
@@ -18,7 +18,7 @@ SUPPORTED_ARCHITECTURES = [
   "DeepseekV2ForCausalLM",
   # TODO: DeepseekV3ForCausalLM
 ]
-SUPPORTED_DTYPES = ["fp32", "fp16", "fp8"]
+SUPPORTED_DTYPES = ["fp32", "fp16", "f8e5m2"]
 
 class Metadata:
   def __init__(self, config, dtype):
@@ -167,7 +167,7 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings):
         for k in f.keys():
           assert(k not in weights)
           weights[k] = f.get_tensor(k)
-  dtype = {"fp32": torch.float32, "fp16": torch.float16, "fp8": torch.float8_e5m2}[dtype_str]
+  dtype = {"fp32": torch.float32, "fp16": torch.float16, "f8e5m2": torch.float8_e5m2}[dtype_str]
 
   # convert weights
   progress = 0
