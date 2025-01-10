@@ -28,6 +28,15 @@ void Config::from_yalm(YALMData& yalm, int context) {
   routed_scaling_factor = yalm.metadata.contains("routed_scaling_factor") ? std::stof(yalm.metadata.at("routed_scaling_factor").get<std::string>()) : 1.0;
   n_group = yalm.metadata.contains("n_group") ? std::stoi(yalm.metadata.at("n_group").get<std::string>()) : 1;
   norm_topk_prob = yalm.metadata.contains("norm_topk_prob") ? yalm.metadata.at("norm_topk_prob").get<std::string>() == "True" : false;
+  std::string scoring_func_str = yalm.metadata.value("scoring_func", "softmax");
+  if (scoring_func_str == "softmax") {
+    scoring_func = ScoringFunc::SOFTMAX;
+  } else if (scoring_func_str == "sigmoid") {
+    scoring_func = ScoringFunc::SIGMOID;
+  } else {
+    std::cerr << "unsupported scoring_func '" << scoring_func_str << "', defaulting to softmax" << std::endl;
+    scoring_func = ScoringFunc::SOFTMAX;
+  }
   topk_group = yalm.metadata.contains("topk_group") ? std::stoi(yalm.metadata.at("topk_group").get<std::string>()) : 0;
   std::string topk_method_str = yalm.metadata.value("topk_method", "");
   if (topk_method_str == "greedy") {

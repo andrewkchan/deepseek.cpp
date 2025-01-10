@@ -25,6 +25,11 @@ enum class TopKMethod {
   NOAUX_TC,
 };
 
+enum class ScoringFunc {
+  SOFTMAX,
+  SIGMOID,
+};
+
 enum class Device {
   CPU,
 };
@@ -55,6 +60,7 @@ struct Config {
   float routed_scaling_factor;
   int n_group;
   bool norm_topk_prob;
+  ScoringFunc scoring_func;
   int topk_group;
   TopKMethod topk_method;
   // multi-latent attention

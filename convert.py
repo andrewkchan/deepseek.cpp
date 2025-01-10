@@ -67,7 +67,6 @@ class Metadata:
       self.n_group = config["n_group"]
       self.norm_topk_prob = config["norm_topk_prob"]
       self.scoring_func = config["scoring_func"]
-      assert self.scoring_func == "softmax" # TODO: support for Deepseek v3
       self.topk_group = config["topk_group"]
       self.topk_method = config["topk_method"]
       assert self.topk_method != "noaux_tc" # TODO: support for Deepseek v3

@@ -117,6 +117,10 @@ static void softmax(float* o, float* x, int size) {
   }
 }
 
+inline float sigmoid(float x) {
+  return 1.0f / (1.0f + expf(-x));
+}
+
 static void moe_gate(
   float* moe_weights, 
   int* active_experts, 
@@ -125,13 +129,20 @@ static void moe_gate(
   int n_active_routed, 
   bool norm_topk_prob,
   float routed_scaling_factor,
+  ScoringFunc scoring_func,
   TopKMethod topk_method,
   int n_group,
   int topk_group
 ) {
   // Set moe_weights[:n_active_routed] to the weights of the top K experts.
   // Set active_experts[:n_active_routed] to the indices of the top K experts.
-  softmax(x, x, n_routed_experts);
+  if (scoring_func == ScoringFunc::SOFTMAX) {
+    softmax(x, x, n_routed_experts);
+  } else if (scoring_func == ScoringFunc::SIGMOID) {
+    for (int i = 0; i < n_routed_experts; i++) {
+      x[i] = sigmoid(x[i]);
+    }
+  }
   
   // top k
   float wsum = 0.0f;
@@ -467,7 +478,7 @@ void Block::_block_cpu(
     moe_gate(
       s.active_experts_weights(), s.active_experts(), s.moe_weights(), 
       c.n_routed_experts, c.n_active_routed, c.norm_topk_prob, c.routed_scaling_factor,
-      c.topk_method, c.n_group, c.topk_group
+      c.scoring_func, c.topk_method, c.n_group, c.topk_group
     );
     for (int k = 0; k < c.n_active_routed; ++k) {
       int expert_index = s.active_experts()[k];
