@@ -31,6 +31,7 @@ void error_usage() {
   fprintf(stderr, "  -n <int>    number of steps to run for in completion mode, default 256. 0 = max_seq_len, -1 = infinite\n");
   fprintf(stderr, "  Choose one:\n");
   fprintf(stderr, "    -i <string> input prompt\n");
+  fprintf(stderr, "    -t <float> temperature (default - 1.0)\n");
   fprintf(stderr, "    -f <filepath> input file with prompt\n");
   fprintf(stderr, "Passkey mode options:\n");
   fprintf(stderr, "  -n <int>    number of junk lines to insert (default - 250)\n");
@@ -55,13 +56,14 @@ void run_completion(
   const std::string& device,
   const std::string& prompt,
   const int context,
-  int num_steps
+  int num_steps,
+  float temperature
 ) {
   YALMData model_data;
   model_data.from_file(checkpoint_path);
   Model model(model_data, context);
   InferenceState state(model.config);
-  Sampler sampler(model.config);
+  Sampler sampler(model.config, get_timestamp_ms());
   Tokenizer tokenizer(model_data);
 
   std::cout << "Model active bytes with full context window: " << model.config->active_bytes(model.config->max_seq_len) << std::endl;
@@ -115,7 +117,7 @@ void run_completion(
   // - Sample + decode output logits
   // - Forward the model
   for (int i = 0; i < num_steps || num_steps == -1; i++) {
-    int token_id = sampler.sample_argmax(state);
+    int token_id = sampler.sample(state, temperature);
     std::string token_str = tokenizer.decode_one(encoding.back(), token_id);
     std::cout << token_str << std::flush;
     encoding.push_back(token_id);
@@ -155,7 +157,7 @@ void run_perplexity(
   model_data.from_file(checkpoint_path);
   Model model(model_data, context);
   InferenceState state(model.config);
-  Sampler sampler(model.config);
+  Sampler sampler(model.config, get_timestamp_ms());
   Tokenizer tokenizer(model_data);
 
   std::cout << "Model active bytes with full context window: " << model.config->active_bytes(model.config->max_seq_len) << std::endl;
@@ -243,7 +245,7 @@ void run_passkey(
   model_data.from_file(checkpoint_path);
   Model model(model_data, context);
   InferenceState state(model.config);
-  Sampler sampler(model.config);
+  Sampler sampler(model.config, get_timestamp_ms());
   Tokenizer tokenizer(model_data);
 
   std::cout << "Model active bytes with full context window: " << model.config->active_bytes(model.config->max_seq_len) << std::endl;
@@ -317,7 +319,7 @@ void run_passkey(
   std::cout << std::endl;
   std::cout << PROMPT_SUFFIX << std::flush;
   for (size_t pos = N; pos < N + MAX_GENERATION_STEPS; pos++) {
-    int token_id = sampler.sample_argmax(state);
+    int token_id = sampler.sample(state);
     std::string token_str = tokenizer.decode_one(encoding.back(), token_id);
     std::cout << token_str << std::flush;
     encoding.push_back(token_id);
@@ -339,6 +341,7 @@ int main(int argc, char* argv[]) {
   int context = 0;
   // Completion mode options
   int num_steps = 256;                 // number of steps to run for
+  float temperature = 1.0;             // temperature
   // Passkey mode options
   int n_junk = 250;                   // number of junk lines to insert
   int passkey_pos = -1;                 // passkey position (-1 - random)
@@ -397,6 +400,12 @@ int main(int argc, char* argv[]) {
       }
       prompt = argv[i + 1];
       i += 2;
+    } else if (argv[i][1] == 't') {
+      if (i + 1 >= argc) {
+        error_usage();
+      }
+      temperature = std::stof(argv[i + 1]);
+      i += 2;
     } else if (argv[i][1] == 'f') {
       if (i + 1 >= argc) {
         error_usage();
@@ -450,7 +459,7 @@ int main(int argc, char* argv[]) {
   }
 
   if (mode == "completion") {
-    run_completion(checkpoint_path, device, prompt, context, num_steps);
+    run_completion(checkpoint_path, device, prompt, context, num_steps, temperature);
   } else if (mode == "passkey") {
     run_passkey(checkpoint_path, device, context, n_junk, passkey_pos);
   } else if (mode == "perplexity") {
