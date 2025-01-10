@@ -2,8 +2,6 @@ MAKEFLAGS+=-r -j
 
 UNAME=$(shell uname)
 
-NVCC?=nvcc
-
 BUILD=build
 ASM_DIR=$(BUILD)/asm
 
@@ -41,15 +39,6 @@ ifneq (,$(wildcard /usr/local/cuda))
   CFLAGS+=-I/usr/local/cuda/include
 endif
 
-CUFLAGS+=-O2 -lineinfo -Ivendor
-CUFLAGS+=-allow-unsupported-compiler # for recent CUDA versions
-
-ifeq ($(CUARCH),)
-  CUFLAGS+=-gencode arch=compute_80,code=sm_80 -gencode arch=compute_90,code=sm_90 --threads 2
-else
-  CUFLAGS+=-arch=$(CUARCH)
-endif
-
 all: $(BINARY) asm
 
 test: $(TEST_BINARY) test-asm
@@ -84,10 +73,6 @@ $(BUILD)/%.cpp.o: %.cpp
 $(BUILD)/%.cc.o: %.cc
 	@mkdir -p $(dir $@)
 	$(CXX) $< $(CFLAGS) -c -MMD -MP -o $@
-
-$(BUILD)/%.cu.o: %.cu
-	@mkdir -p $(dir $@)
-	$(NVCC) $< $(CUFLAGS) -c -MMD -MP -o $@
 
 -include $(OBJECTS:.o=.d)
 -include $(TEST_OBJECTS:.o=.d)

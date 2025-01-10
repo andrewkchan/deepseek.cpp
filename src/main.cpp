@@ -19,7 +19,6 @@ void error_usage() {
   fprintf(stderr, "Example: main model.dseek -i \"Q: What is the meaning of life?\"\n");
   fprintf(stderr, "Options:\n");
   fprintf(stderr, "  -h Display this help message\n");
-  fprintf(stderr, "  -d [cpu,cuda] which device to use (default - cuda)\n");
   fprintf(stderr, "  -m [completion,passkey,perplexity] which mode to run in (default - completion)\n");
   fprintf(stderr, "  -T <int> sliding window context length (0 - max)\n");
   fprintf(stderr, "\n");
@@ -39,21 +38,8 @@ void error_usage() {
   exit(1);
 }
 
-#if DEBUG_MODEL
-void debug_tensors(Config& c) {
-  assert(debug_map_cpu().size() == debug_map_cuda().size());
-  for (auto& [name, cpu] : debug_map_cpu()) {
-    DebugTensor& cuda = debug_map_cuda().at(name);
-    float maxerr = cpu.max_err(cuda);
-    std::cout << fmt::format("{} maxerr: {}", name, maxerr) << std::endl;
-  }
-  std::cout << std::endl;
-}
-#endif
-
 void run_completion(
   const std::string& checkpoint_path,
-  const std::string& device,
   const std::string& prompt,
   const int context,
   int num_steps,
@@ -72,16 +58,9 @@ void run_completion(
     // `-n 0` means use the full context length
     num_steps = model.config->max_seq_len;
   }
-  if (device == "cuda") {
-    std::cout << "Using CUDA" << std::endl;
-    model.cuda();
-    state.cuda();
-  }
 
   // Do one inference as warmup.
   // On CPU, this ensures all tensors are loaded into memory via mmap.
-  // On GPU, this ensures all tensors are loaded into device memory and 
-  // kernels are compiled + instantiated.
   model.forward(state, 0, 0);
 
   std::vector<int> encoding;
@@ -149,7 +128,6 @@ void run_completion(
 
 void run_perplexity(
   const std::string& checkpoint_path,
-  const std::string& device,
   const std::string& prompt,
   const int context
 ) {
@@ -162,16 +140,8 @@ void run_perplexity(
 
   std::cout << "Model active bytes with full context window: " << model.config->active_bytes(model.config->max_seq_len) << std::endl;
 
-  if (device == "cuda") {
-    std::cout << "Using CUDA" << std::endl;
-    model.cuda();
-    state.cuda();
-  }
-
   // Do one inference as warmup.
   // On CPU, this ensures all tensors are loaded into memory via mmap.
-  // On GPU, this ensures all tensors are loaded into device memory and 
-  // kernels are compiled + instantiated.
   model.forward(state, 0, 0);
 
   std::vector<int> encoding;
@@ -236,7 +206,6 @@ void run_perplexity(
 
 void run_passkey(
   const std::string& checkpoint_path,
-  const std::string& device,
   const int context,
   const int n_junk,
   const int passkey_pos
@@ -249,18 +218,6 @@ void run_passkey(
   Tokenizer tokenizer(model_data);
 
   std::cout << "Model active bytes with full context window: " << model.config->active_bytes(model.config->max_seq_len) << std::endl;
-
-  if (device == "cuda") {
-    std::cout << "Using CUDA" << std::endl;
-    model.cuda();
-    state.cuda();
-  }
-
-  // Do one inference as warmup.
-  // On CPU, this ensures all tensors are loaded into memory via mmap.
-  // On GPU, this ensures all tensors are loaded into device memory and 
-  // kernels are compiled + instantiated.
-  model.forward(state, 0, 0);
 
   const std::string PROMPT_PREFIX = 
     "There is an important info hidden inside a lot of irrelevant text. "
@@ -334,7 +291,6 @@ void run_passkey(
 int main(int argc, char* argv[]) {
   std::string checkpoint_path = "";    // e.g. out/model.bin
   // Options
-  std::string device = "cuda";         // cpu or cuda
   std::string mode = "completion";     // completion, passkey, or perplexity
   std::string prompt = "";             // prompt string
   std::string prompt_path = "";        // prompt file path
@@ -377,19 +333,6 @@ int main(int argc, char* argv[]) {
         mode = "passkey";
       } else if (std::string("perplexity").starts_with(mode)) {
         mode = "perplexity";
-      } else {
-        error_usage();
-      }
-      i += 2;
-    } else if (argv[i][1] == 'd') {
-      if (i + 1 >= argc) {
-        error_usage();
-      }
-      device = argv[i + 1];
-      if (std::string("cpu").starts_with(device)) {
-        device = "cpu";
-      } else if (std::string("cuda").starts_with(device)) {
-        device = "cuda";
       } else {
         error_usage();
       }
@@ -459,11 +402,11 @@ int main(int argc, char* argv[]) {
   }
 
   if (mode == "completion") {
-    run_completion(checkpoint_path, device, prompt, context, num_steps, temperature);
+    run_completion(checkpoint_path, prompt, context, num_steps, temperature);
   } else if (mode == "passkey") {
-    run_passkey(checkpoint_path, device, context, n_junk, passkey_pos);
+    run_passkey(checkpoint_path, context, n_junk, passkey_pos);
   } else if (mode == "perplexity") {
-    run_perplexity(checkpoint_path, device, prompt, context);
+    run_perplexity(checkpoint_path, prompt, context);
   }
 
   return 0;

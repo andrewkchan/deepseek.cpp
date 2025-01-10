@@ -1,7 +1,6 @@
 #pragma once
 
 #include "codec.h"
-#include "cuda_runtime_api.h"
 
 #include <memory>
 #include <vector>
@@ -28,21 +27,12 @@ enum class TopKMethod {
 
 enum class Device {
   CPU,
-  CUDA,
 };
 
 enum class InferenceMode {
   HYDRATE_KV_CACHE, // only hydrate the KV cache and don't compute output logits
   OUTPUT_LOGITS // set InferenceState logits to logits for the next token
 };
-
-extern "C" void* upload_cuda(void* host, size_t size);
-extern "C" void* download_cuda(void* device, size_t size, std::string debug);
-extern "C" void register_cuda_host(void* host, size_t size);
-extern "C" void free_cuda(void* device);
-extern "C" void unregister_cuda_host(void* host);
-extern "C" void set_cuda_device(int device);
-extern "C" void init_cuda_stream(cudaStream_t* stream);
 
 struct Config {
   int dim;                  // transformer input & output dimension
@@ -83,17 +73,6 @@ struct Config {
   size_t active_bytes(size_t pos) const;
 };
 
-struct CudaGraph {
-  cudaGraph_t graph;
-  cudaGraphExec_t instance;
-  bool is_created = false;
-  std::unordered_map<std::string, cudaGraphNode_t> nodes;
-
-  void wrap(std::function<void()> func, cudaStream_t s);
-  void launch(cudaStream_t s);
-  void add_or_update_kernel_node(std::string key, cudaKernelNodeParams params, cudaStream_t stream);
-};
-
 // Buffer for all state used during a forward pass.
 // Members are reused across subsequent blocks and passes.
 // This lets us avoid allocations during inference.
@@ -130,22 +109,14 @@ struct InferenceState {
   // LM head
   float* logits() const { return _logits; }
 
-  void cuda();
   Device device() const { return _device; }
-  cudaStream_t stream() const { return _stream; }
   InferenceMode mode() const { return _mode; }
   void set_mode(InferenceMode mode) { _mode = mode; }
-  CudaGraph& graph() {
-    return _mode == InferenceMode::HYDRATE_KV_CACHE ? _hydrate_graph : _output_graph;
-  }
 
 private:
   std::shared_ptr<Config> _config;
   Device _device = Device::CPU;
-  cudaStream_t _stream;
   InferenceMode _mode = InferenceMode::OUTPUT_LOGITS;
-  CudaGraph _hydrate_graph;
-  CudaGraph _output_graph;
 
   // current activations
   float* _x = nullptr;         // (dim,) - latest activation
@@ -167,8 +138,6 @@ private:
   int* _active_experts = nullptr; // (n_active_experts,) - buffer for indices of top K experts (active experts)
   
   // LM head
-  // NOTE: this always lives on the host (CPU), but must be registered 
-  // with CUDA to be used on the device.
   float* _logits = nullptr;    // (vocab_size,) - final output logits
 };
 
@@ -244,19 +213,9 @@ struct Block {
     int kv_len          // number of tokens in the kv cache that we will attend over
   ) const;
 
-  void cuda();
-
 private:
   template <typename T>
   void _block_cpu(
-    InferenceState& s,  // inference state
-    int pos,            // index of the current token in the sequence
-    int kv_sink,        // number of sink tokens currently in the KV cache
-    int kv_pos,         // index of the current token in the kv cache, must be in [0..kv_len) since kv cache is a ring buffer
-    int kv_len          // number of tokens in the kv cache that we will attend over
-  ) const;
-  template <typename T>
-  void _block_cuda(
     InferenceState& s,  // inference state
     int pos,            // index of the current token in the sequence
     int kv_sink,        // number of sink tokens currently in the KV cache
@@ -313,7 +272,6 @@ struct Model {
   Model(YALMData& yalm, int context = 0);
   
   void forward(InferenceState& s, int token, int pos, InferenceMode mode = InferenceMode::OUTPUT_LOGITS);
-  void cuda();
 
 private:
   void _forward_cpu(InferenceState& s, int token, int pos, InferenceMode mode);
@@ -342,7 +300,6 @@ struct DebugTensor {
   DataType data_type;
 };
 std::map<std::string, DebugTensor>& debug_map_cpu();
-std::map<std::string, DebugTensor>& debug_map_cuda();
 #endif
 
 ////////////////////////////////////////
@@ -368,31 +325,13 @@ void mha_cpu(
   float* q,     // (n_heads, head_dim)
   int head_dim, int v_head_dim, int kv_len, int max_seq_len, int n_heads, int n_kv_heads
 );
-// TODO update me for MLA
-void mha_cuda(
-  float* xout,  // (n_heads, head_dim)
-  float* att,   // (n_heads, max_seq_len)
-  f16_t* kb,    // (max_seq_len, n_kv_heads, head_dim)
-  f16_t* vb,    // (max_seq_len, n_kv_heads, head_dim)
-  float* q,     // (n_heads, head_dim)
-  int head_dim, int kv_len, int max_seq_len, int n_heads, int n_kv_heads
-);
 
 void matmul_cpu(float* xout, float* x, float* w, int n, int d);
 void matmul_cpu(float* xout, float* x, f16_t* w, int n, int d);
-template <typename T>
-void matmul_cuda(float* xout, float* x, T* w, int n, int d);
 
 void ffn_cpu(
   float* xout, float* x, 
   float* w1, float* w2, float* w3, 
-  int hidden_dim, int dim,
-  ActivationType act
-);
-template <typename T>
-void ffn_cuda(
-  float* xout, float* x, 
-  T* w1, T* w2, T* w3, 
   int hidden_dim, int dim,
   ActivationType act
 );

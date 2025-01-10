@@ -5,7 +5,7 @@ This is an implementation of inference for the DeepSeek family of large language
 
 # Instructions
 
-deepseek.cpp requires a computer with a C++20-compatible compiler and the CUDA toolkit (including `nvcc`) to be installed. You'll also need a directory containing LLM safetensor weights and configuration files in huggingface format, which you'll need to convert into a `.dseek` file. Follow the below to download DeepSeek-V2-Lite, build `deepseek.cpp`, and run it:
+deepseek.cpp requires a computer with a C++20-compatible compiler. You'll also need a directory containing LLM safetensor weights and configuration files in huggingface format, which you'll need to convert into a `.dseek` file. Follow the below to download DeepSeek-V2-Lite, build `deepseek.cpp`, and run it:
 
 ```
 # install git LFS
@@ -31,7 +31,6 @@ Usage:   main <checkpoint> [options]
 Example: main model.dseek -i "Q: What is the meaning of life?"
 Options:
   -h Display this help message
-  -d [cpu,cuda] which device to use (default - cuda)
   -m [completion,passkey,perplexity] which mode to run in (default - completion)
   -T <int> sliding window context length (0 - max)
 

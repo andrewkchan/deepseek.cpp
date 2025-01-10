@@ -269,57 +269,7 @@ Block::~Block() {
   if (_device == Device::CPU) {
     delete[] _key_cache;
     delete[] _value_cache;
-  } else {
-    free_cuda(_key_cache);
-    free_cuda(_value_cache);
   }
-}
-
-void Block::cuda() {
-  if (_device != Device::CPU) {
-    return;
-  }
-  _device = Device::CUDA;
-  size_t weight_size = dtype_size(_config->weight_dtype);
-  // norms
-  _rms_att_weight = static_cast<float*>(upload_cuda(_rms_att_weight, _config->dim * sizeof(float)));
-  if (_config->q_lora_rank > 0) {
-    _rms_q_a_weight = static_cast<float*>(upload_cuda(_rms_q_a_weight, _config->q_lora_rank * sizeof(float)));
-  }
-  _rms_kv_a_weight = static_cast<float*>(upload_cuda(_rms_kv_a_weight, _config->kv_lora_rank * sizeof(float)));
-  _rms_ffn_weight = static_cast<float*>(upload_cuda(_rms_ffn_weight, _config->dim * sizeof(float)));
-
-  // self-attention
-  if (_config->q_lora_rank > 0) {
-    _wq_a = upload_cuda(_wq_a, _config->q_lora_rank * _config->dim * weight_size);
-    _wq_b = upload_cuda(_wq_b, _config->n_heads * _config->head_dim * _config->q_lora_rank * weight_size);
-  } else {
-    _wq = upload_cuda(_wq, _config->n_heads * _config->head_dim * _config->dim * weight_size);
-  }
-  _wkv_a = upload_cuda(_wkv_a, (_config->kv_lora_rank + _config->qk_rope_head_dim) * _config->dim * weight_size);
-  _wkv_b = upload_cuda(_wkv_b, _config->n_kv_heads * (_config->head_dim-_config->qk_rope_head_dim+_config->v_head_dim) * _config->kv_lora_rank * weight_size);
-  _wo = upload_cuda(_wo, _config->dim * _config->n_heads * _config->head_dim * weight_size);
-
-  // ffn
-  if (_config->n_routed_experts > 0 && _layer_i >= _config->first_k_dense_replace) {
-    _moegate = upload_cuda(_moegate, _config->n_routed_experts * _config->dim * weight_size);
-    _w1 = upload_cuda(_w1, _config->n_routed_experts * _config->moe_intermediate_size * _config->dim * weight_size);
-    _w2 = upload_cuda(_w2, _config->n_routed_experts * _config->dim * _config->moe_intermediate_size * weight_size);
-    _w3 = upload_cuda(_w3, _config->n_routed_experts * _config->moe_intermediate_size * _config->dim * weight_size);
-  } else {
-    _w1 = upload_cuda(_w1, _config->hidden_dim * _config->dim * weight_size);
-    _w2 = upload_cuda(_w2, _config->dim * _config->hidden_dim * weight_size);
-    _w3 = upload_cuda(_w3, _config->hidden_dim * _config->dim * weight_size);
-  }
-  if (_config->n_shared_experts > 0) {
-    _shared_w1 = upload_cuda(_shared_w1, _config->n_shared_experts * _config->moe_intermediate_size * _config->dim * weight_size);
-    _shared_w2 = upload_cuda(_shared_w2, _config->n_shared_experts * _config->dim * _config->moe_intermediate_size * weight_size);
-    _shared_w3 = upload_cuda(_shared_w3, _config->n_shared_experts * _config->moe_intermediate_size * _config->dim * weight_size);
-  }
-
-  // kv cache
-  _key_cache = static_cast<f16_t*>(upload_cuda(_key_cache, _config->max_seq_len * _config->n_kv_heads * _config->head_dim * sizeof(f16_t)));
-  _value_cache = static_cast<f16_t*>(upload_cuda(_value_cache, _config->max_seq_len * _config->n_kv_heads * _config->v_head_dim * sizeof(f16_t)));
 }
 
 void Block::block(
@@ -329,21 +279,7 @@ void Block::block(
   int kv_pos,         // index of the current token in the kv cache, must be in [0..kv_len) since kv cache is a ring buffer
   int kv_len          // number of tokens in the kv cache that we will attend over
 ) const {
-  if (_device == Device::CUDA) {
-    switch (_config->weight_dtype) {
-      case DType::F32: {
-        _block_cuda<float>(s, pos, kv_sink, kv_pos, kv_len);
-        break;
-      }
-      case DType::F16: {
-        _block_cuda<f16_t>(s, pos, kv_sink, kv_pos, kv_len);
-        break;
-      }
-      default: {
-        assert(false && "unsupported weight dtype for cuda");
-      }
-    }
-  } else {
+  if (_device == Device::CPU) {
     switch (_config->weight_dtype) {
       case DType::F32: {
         _block_cpu<float>(s, pos, kv_sink, kv_pos, kv_len);
@@ -362,7 +298,6 @@ void Block::block(
       }
     }
   }
-
 }
 
 InferenceState::InferenceState(const std::shared_ptr<Config> config): 
@@ -411,52 +346,6 @@ InferenceState::~InferenceState() {
       delete[] _active_experts;
       delete[] _active_experts_weights;
     }
-  } else {
-    free_cuda(_x);
-    free_cuda(_xb);
-    free_cuda(_xb2);
-    free_cuda(_hb);
-    free_cuda(_hb2);
-    free_cuda(_q);
-    free_cuda(_kv_a);
-    free_cuda(_kv_b);
-    free_cuda(_ropebuf);
-    free_cuda(_k);
-    free_cuda(_v);
-    free_cuda(_att);
-    unregister_cuda_host(_logits);
-    delete[] _logits;
-    if (_moe_weights != nullptr) {
-      free_cuda(_moe_weights);
-      free_cuda(_active_experts);
-      free_cuda(_active_experts_weights);
-    }
-  }
-}
-
-void InferenceState::cuda() {
-  if (_device != Device::CPU) {
-    return;
-  }
-  _device = Device::CUDA;
-  init_cuda_stream(&_stream);
-  _x = static_cast<float*>(upload_cuda(_x, _config->dim * sizeof(float)));
-  _xb = static_cast<float*>(upload_cuda(_xb, _config->dim * sizeof(float)));
-  _xb2 = static_cast<float*>(upload_cuda(_xb2, std::max(_config->dim, _config->n_kv_heads * _config->v_head_dim) * sizeof(float)));
-  _hb = static_cast<float*>(upload_cuda(_hb, _config->hidden_dim * sizeof(float)));
-  _hb2 = static_cast<float*>(upload_cuda(_hb2, _config->hidden_dim * sizeof(float)));
-  _q = static_cast<float*>(upload_cuda(_q, _config->n_heads * _config->head_dim * sizeof(float)));
-  _kv_a = static_cast<float*>(upload_cuda(_kv_a, (_config->kv_lora_rank + _config->qk_rope_head_dim) * sizeof(float)));
-  _kv_b = static_cast<float*>(upload_cuda(_kv_b, _config->n_kv_heads * (_config->head_dim-_config->qk_rope_head_dim+_config->v_head_dim) * sizeof(float)));
-  _ropebuf = static_cast<float*>(upload_cuda(_ropebuf, _config->n_kv_heads * _config->qk_rope_head_dim * sizeof(float)));
-  _k = static_cast<float*>(upload_cuda(_k, _config->n_kv_heads * _config->head_dim * sizeof(float)));
-  _v = static_cast<float*>(upload_cuda(_v, _config->n_kv_heads * _config->v_head_dim * sizeof(float)));
-  _att = static_cast<float*>(upload_cuda(_att, _config->n_heads * _config->max_seq_len * sizeof(float)));
-  register_cuda_host(_logits, _config->vocab_size * sizeof(float));
-  if (_moe_weights != nullptr) {
-    _moe_weights = static_cast<float*>(upload_cuda(_moe_weights, _config->n_routed_experts * sizeof(float)));
-    _active_experts = static_cast<int*>(upload_cuda(_active_experts, _config->n_active_routed * sizeof(int)));
-    _active_experts_weights = static_cast<float*>(upload_cuda(_active_experts_weights, _config->n_active_routed * sizeof(float)));
   }
 }
 
@@ -512,31 +401,13 @@ Model::Model(YALMData& yalm, int context) {
   }
 }
 
-void Model::cuda() {
-  if (_device != Device::CPU) {
-    return;
-  }
-  _device = Device::CUDA;
-  // TODO: support multiple CUDA devices
-  set_cuda_device(0);
-  size_t weight_size = dtype_size(config->weight_dtype);
-  token_embedding_table = upload_cuda(token_embedding_table, config->vocab_size * config->dim * weight_size);
-  for (auto& block : blocks) {
-    block->cuda();
-  }
-  rms_final_weight = static_cast<float*>(upload_cuda(rms_final_weight, config->dim * sizeof(float)));
-  wcls = upload_cuda(wcls, config->vocab_size * config->dim * weight_size);
-}
-
 void Model::forward(InferenceState& s, int token, int pos, InferenceMode mode) {
   if (s.device() != _device) {
     std::cerr << "FATAL: inference state device mismatch" << std::endl;
     assert(false);
     return;
   }
-  if (_device == Device::CUDA) {
-    _forward_cuda(s, token, pos, mode);
-  } else {
+  if (_device == Device::CPU) {
     _forward_cpu(s, token, pos, mode);
   }
 }
