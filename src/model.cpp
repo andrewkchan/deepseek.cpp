@@ -89,11 +89,12 @@ void Config::from_yalm(YALMData& yalm, int context) {
     std::stoi(yalm.metadata.at("first_k_dense_replace").get<std::string>()) : 0;
 
   std::string dtype = yalm.metadata.at("dtype").get<std::string>();
-  // TODO: support fp8
   if (dtype == "fp32") {
     weight_dtype = DType::F32;
   } else if (dtype == "fp16") {
     weight_dtype = DType::F16;
+  } else if (dtype == "f8e5m2") {
+    weight_dtype = DType::F8E5M2;
   } else {
     std::cerr << "FATAL: unsupported dtype: " << dtype << std::endl;
     assert(false);
@@ -187,7 +188,8 @@ Block::Block(
   _config = config;
   switch (config->weight_dtype) {
     case DType::F32:
-    case DType::F16: {
+    case DType::F16:
+    case DType::F8E5M2: {
       break;
     }
     default: {
@@ -300,6 +302,10 @@ void Block::block(
 #else
         assert(false && "float16 not supported on this platform");
 #endif
+        break;
+      }
+      case DType::F8E5M2: {
+        _block_cpu<f8e5m2_t>(s, pos, kv_sink, kv_pos, kv_len);
         break;
       }
       default: {
