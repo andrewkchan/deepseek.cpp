@@ -212,6 +212,16 @@ void test_matmul() {
     matmul_cpu(xout_roundtrip.data(), x.data(), w8_roundtrip.data(), 16, 2);
     assertArrayEquals(xout_roundtrip, xout, "matmul_f8e5m2_roundtrip");
   }
+  std::vector<float> x8_roundtrip;
+  for (size_t i = 0; i < x.size(); i++) {
+    x8_roundtrip.push_back(float8e5m2_to_float(float_to_float8e5m2(x[i])));
+  }
+  assertArrayEquals(x8_roundtrip, {
+    2.1875e-01,  1.7500e+00,  8.7500e-01, -1.5625e-01, 
+    -8.7500e-01, 6.2500e-01,  2.1875e-01,  1.0000e+00, 
+    -1.7090e-03,  8.7500e-01, 2.1875e-01, -1.5000e+00,
+    4.3750e-01, -1.2500e+00,  2.1875e-01, 6.2500e-01
+  }, "x_float8e5m2_roundtrip");
 }
 
 void fill_random(float* data, size_t N, unsigned long seed, float scale_factor = 1.0) {
