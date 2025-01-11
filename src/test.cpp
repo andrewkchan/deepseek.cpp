@@ -204,6 +204,13 @@ void test_matmul() {
     assertArrayEquals(xout, {
       -3.7454, -3.2738
     }, "matmul_f8e5m2", 3.78e-1);
+    std::vector<float> xout_roundtrip(2);
+    std::vector<float> w8_roundtrip;
+    for (size_t i = 0; i < w_f8e5m2.size(); i++) {
+      w8_roundtrip.push_back(float8e5m2_to_float(w_f8e5m2[i]));
+    }
+    matmul_cpu(xout_roundtrip.data(), x.data(), w8_roundtrip.data(), 16, 2);
+    assertArrayEquals(xout_roundtrip, xout, "matmul_f8e5m2_roundtrip");
   }
 }
 
