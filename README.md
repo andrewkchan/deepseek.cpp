@@ -1,4 +1,10 @@
-This is an CPU-only inference implementation for the DeepSeek family of large language models written in C++, based on [Yet Another Language Model](https://github.com/andrewkchan/yalm). Support is as follows:
+This is an CPU-only inference implementation for the DeepSeek family of large language models written in C++, based on [Yet Another Language Model](https://github.com/andrewkchan/yalm). 
+
+## Why?
+
+I was initially adding DeepSeek support to `yalm` but realized that the changes were large and complex enough that it might ruin the simplicity of that project. Maybe at some point I'll upstream the changes, but for fun I've decided to fork them into a separate, smaller, leaner codebase. Folks who want DeepSeek support on low-end CPU-only devices may also find this useful, especially since this program doesn't require a Python runtime and is tiny compared to other inference engines (<2k LOC not including `fmt` and `json`, vs. >250k for llama.cpp and vllm).
+
+## Model support
 
 | Model      | F8E5M2 | F8E4M3 | FP16 | BF16 | FP32 |
 | -----      | ------ | ------ | ---- | ---- | ---- |
@@ -25,7 +31,7 @@ python convert.py --dtype fp16 v2-lite-f16.dseek ../DeepSeek-V2-Lite/
 ./build/main v2-lite-f16.dseek -i "What is a large language model?" -m c -t 0.5
 ```
 
-# Usage
+## Usage
 
 See the CLI help documentation below for `./build/main`:
 
