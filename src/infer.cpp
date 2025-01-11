@@ -30,7 +30,7 @@ inline float float8e5m2_to_float(f8e5m2_t x) {
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
   memcpy(&val, &x, sizeof(f8e5m2_t));
 #else
-  memcpy((char*)&val + sizeof(f8e5m2_t), &x, sizeof(f8e5m2_t)); // TODO: round instead of truncate?
+  memcpy((char*)&val + sizeof(f8e5m2_t), &x, sizeof(f8e5m2_t));
 #endif
   return half_to_float(val);
 }
