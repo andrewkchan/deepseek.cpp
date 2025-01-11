@@ -32,12 +32,6 @@ LDFLAGS=-lm
 
 CFLAGS+=-fopenmp -mf16c -mavx2 -mfma
 LDFLAGS+=-fopenmp
-LDFLAGS+=-lcudart
-
-ifneq (,$(wildcard /usr/local/cuda))
-  LDFLAGS+=-L/usr/local/cuda/lib64
-  CFLAGS+=-I/usr/local/cuda/include
-endif
 
 all: $(BINARY) asm
 
