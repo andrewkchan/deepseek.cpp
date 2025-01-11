@@ -77,14 +77,15 @@ inline float float8e5m2_to_float(f8e5m2_t x) {
   return half_to_float(val);
 }
 inline f8e5m2_t float_to_float8e5m2(float x) {
-  f16_t val = float_to_half(x);
-  f8e5m2_t out;
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-  memcpy(&out, (char*)&val, sizeof(f8e5m2_t)); // TODO: round instead of truncate?
-#else
-  memcpy(&out, (char*)&val + sizeof(f8e5m2_t), sizeof(f8e5m2_t)); // TODO: round instead of truncate?
-#endif
-  return out;
+  if (std::isnan(x)) {
+    return 0x7E;
+  }
+  uint16_t val = float_to_half(x);
+  uint16_t lsb = (val >> 8) & 1;
+  uint16_t rounding_bias = 0x7f + lsb;
+  val += rounding_bias;
+  uint8_t output = static_cast<uint8_t>(val >> 8);
+  return output;
 }
 
 std::vector<f16_t> float_array_to_half(const std::vector<float>& data) {
@@ -203,7 +204,7 @@ void test_matmul() {
     matmul_cpu(xout.data(), x.data(), w_f8e5m2.data(), 16, 2);
     assertArrayEquals(xout, {
       -3.7454, -3.2738
-    }, "matmul_f8e5m2", 3.78e-1);
+    }, "matmul_f8e5m2", 2.21e-1);
     std::vector<float> xout_roundtrip(2);
     std::vector<float> w8_roundtrip;
     for (size_t i = 0; i < w_f8e5m2.size(); i++) {
