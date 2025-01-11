@@ -334,6 +334,7 @@ void mha_cpu(
 
 void matmul_cpu(float* xout, float* x, float* w, int n, int d);
 void matmul_cpu(float* xout, float* x, f16_t* w, int n, int d);
+void matmul_cpu(float* xout, float* x, f8e5m2_t* w, int n, int d);
 
 void ffn_cpu(
   float* xout, float* x, 

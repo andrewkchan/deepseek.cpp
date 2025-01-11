@@ -33,7 +33,7 @@ inline float float8e5m2_to_float(f8e5m2_t x) {
 [[maybe_unused]] inline f8e5m2_t float_to_float8e5m2(float x) {
   f16_t val = float_to_half(x);
   f8e5m2_t out;
-  memcpy(&out, &val, sizeof(f8e5m2_t)); // TODO: round instead of truncate?
+  memcpy(&out, (char*)&val + sizeof(f8e5m2_t), sizeof(f8e5m2_t)); // TODO: round instead of truncate?
   return out;
 }
 
@@ -649,6 +649,9 @@ void matmul_cpu(float* xout, float* x, float* w, int n, int d) {
   matmul(xout, x, w, n, d);
 }
 void matmul_cpu(float* xout, float* x, f16_t* w, int n, int d) {
+  matmul(xout, x, w, n, d);
+}
+void matmul_cpu(float* xout, float* x, f8e5m2_t* w, int n, int d) {
   matmul(xout, x, w, n, d);
 }
 

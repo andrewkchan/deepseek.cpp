@@ -51,17 +51,56 @@ void assertArrayEquals(float* actual, const std::vector<float>& expected, const 
   assertArrayEquals(actual_array, expected, message);
 }
 
-std::vector<f16_t> float_array_to_half(const std::vector<float>& data) {
+inline float half_to_float(f16_t x) {
 #if defined(__AVX2__) && defined(__F16C__)
-  std::vector<f16_t> half_data(data.size());
-  for (size_t i = 0; i < data.size(); i++) {
-    half_data[i] = _cvtss_sh(data[i], 0);
-  }
-  return half_data;
+  return _cvtsh_ss(x);
+#else
+  assert(false && "Cannot convert to float due to missing F16C extensions");
+  return 0.0f;
+#endif
+}
+inline f16_t float_to_half(float x) {
+#if defined(__AVX2__) && defined(__F16C__)
+  return _cvtss_sh(x, 0);
 #else
   assert(false && "Cannot convert to half due to missing F16C extensions");
-  return {};
+  return 0;
 #endif
+}
+inline float float8e5m2_to_float(f8e5m2_t x) {
+  f16_t val = 0;
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  memcpy(&val, &x, sizeof(f8e5m2_t));
+#else
+  memcpy((char*)&val + sizeof(f8e5m2_t), &x, sizeof(f8e5m2_t)); // TODO: round instead of truncate?
+#endif
+  return half_to_float(val);
+}
+inline f8e5m2_t float_to_float8e5m2(float x) {
+  f16_t val = float_to_half(x);
+  f8e5m2_t out;
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  memcpy(&out, (char*)&val, sizeof(f8e5m2_t)); // TODO: round instead of truncate?
+#else
+  memcpy(&out, (char*)&val + sizeof(f8e5m2_t), sizeof(f8e5m2_t)); // TODO: round instead of truncate?
+#endif
+  return out;
+}
+
+std::vector<f16_t> float_array_to_half(const std::vector<float>& data) {
+  std::vector<f16_t> half_data(data.size());
+  for (size_t i = 0; i < data.size(); i++) {
+    half_data[i] = float_to_half(data[i]);
+  }
+  return half_data;
+}
+
+std::vector<f8e5m2_t> float_array_to_float8e5m2(const std::vector<float>& data) {
+  std::vector<f8e5m2_t> float8e5m2_data(data.size());
+  for (size_t i = 0; i < data.size(); i++) {
+    float8e5m2_data[i] = float_to_float8e5m2(data[i]);
+  }
+  return float8e5m2_data;
 }
 
 void test_attn() {
@@ -108,7 +147,7 @@ void test_attn() {
     int kv_head_offset = (h / q_per_kv_head) * TEST_HEAD_DIM;
     f16_t* kh = kb.data() + kv_head_offset;
     f16_t* vh = vb.data() + kv_head_offset;
-    attn(s.xb(h), s.att(h), s.q(h), kh, vh, TEST_HEAD_DIM, TEST_N_KV_HEADS, TEST_SEQ_LEN);
+    attn(s.xb(h), s.att(h), s.q(h), kh, vh, TEST_HEAD_DIM, TEST_HEAD_DIM, TEST_N_KV_HEADS, TEST_SEQ_LEN);
   }
   // attention scores
   // h=0
@@ -123,6 +162,49 @@ void test_attn() {
     0., 1., 0., // h=0
     0., 0., 1. // h=1
   }, "xout");
+}
+
+void test_matmul() {
+  assert(float8e5m2_to_float(float_to_float8e5m2(1.0f)) == 1.0f);
+  assert(float8e5m2_to_float(float_to_float8e5m2(-1.5f)) == -1.5f);
+  assert(float8e5m2_to_float(float_to_float8e5m2(0.109375)) == 0.109375);
+  std::vector<float> x{ 
+    2.0624e-01,  1.6975e+00,  8.4918e-01, -1.7186e-01, 
+    -9.0164e-01, 6.1108e-01,  2.2116e-01,  1.0412e+00, 
+    -1.6616e-03,  8.2840e-01, 2.2667e-01, -1.3993e+00,  
+    4.1013e-01, -1.2223e+00,  2.2723e-01, 6.3558e-01
+  };
+  std::vector<float> w_f32{
+    // row 1
+    -1.1210, -0.0235, -1.3527,  0.6300,  0.2566, -0.4517, -0.3528,  0.4422, 
+    -0.4032, -1.0949, -0.7834,  1.1425,  0.6263, -0.3680,  0.3226, -0.2984,
+    // row 2
+    0.1176, -1.1462, -0.8181, -2.0047,  0.0932,  1.4665, -0.8682, -0.8490,
+    -1.3017, -1.0068, -0.2890,  0.0167,  1.1607,  0.7196,  1.7701,  0.2891
+  };
+  std::vector<f16_t> w_f16 = float_array_to_half(w_f32);
+  std::vector<f8e5m2_t> w_f8e5m2 = float_array_to_float8e5m2(w_f32);
+  {
+    std::vector<float> xout(2);
+    matmul_cpu(xout.data(), x.data(), w_f32.data(), 16, 2);
+    assertArrayEquals(xout, {
+      -3.7454, -3.2738
+    }, "matmul_f32", 1e-4);
+  }
+  {
+    std::vector<float> xout(2);
+    matmul_cpu(xout.data(), x.data(), w_f16.data(), 16, 2);
+    assertArrayEquals(xout, {
+      -3.7454, -3.2738
+    }, "matmul_f16", 1e-3);
+  }
+  {
+    std::vector<float> xout(2);
+    matmul_cpu(xout.data(), x.data(), w_f8e5m2.data(), 16, 2);
+    assertArrayEquals(xout, {
+      -3.7454, -3.2738
+    }, "matmul_f8e5m2", 3.78e-1);
+  }
 }
 
 void fill_random(float* data, size_t N, unsigned long seed, float scale_factor = 1.0) {
@@ -258,6 +340,7 @@ int main(int argc, char* argv[]) {
     mem_bench2();
   } else {
     test_attn();
+    test_matmul();
   }
   std::cout << "All tests passed" << std::endl;
   return 0;
