@@ -54,7 +54,7 @@ class Metadata:
 
       # multi-latent attention
       self.kv_lora_rank = config["kv_lora_rank"]
-      self.q_lora_rank = config["q_lora_rank"]
+      self.q_lora_rank = config["q_lora_rank"] or 0
       self.qk_nope_head_dim = config["qk_nope_head_dim"]
       self.qk_rope_head_dim = config["qk_rope_head_dim"]
       assert config.get("quantization_config", None) is None # TODO: support for Deepseek v3
