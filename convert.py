@@ -12,6 +12,8 @@ import safetensors
 from safetensors.torch import save_file
 import torch
 
+from typing import Tuple
+
 SUPPORTED_ARCHITECTURES = [
   # TODO: Llama (deepseek 1)?
   # TODO: DeepseekForCausalLM
@@ -153,6 +155,45 @@ def load_tokens(tokenizer_path, vocab_size):
   
   return tokens
 
+def per_tensor_quantize(tensor: torch.Tensor, dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
+  """Quantize a tensor using per-tensor static scaling factor.
+  Args:
+      tensor: The input tensor.
+      dtype: The data type to quantize to.
+  """
+  finfo = torch.finfo(dtype)
+  # Calculate the scale as dtype max divided by absmax.
+  # Since .abs() creates a new tensor, we use aminmax to get
+  # the min and max first and then calculate the absmax.
+  if tensor.numel() == 0:
+    # Deal with empty tensors (triggered by empty MoE experts)
+    min_val, max_val = (
+      torch.tensor(-16.0, dtype=tensor.dtype),
+      torch.tensor(16.0, dtype=tensor.dtype),
+    )
+  else:
+    min_val, max_val = tensor.aminmax()
+  amax = torch.maximum(min_val.abs(), max_val.abs())
+  scale = finfo.max / amax.clamp(min=1e-12)
+  # scale and clamp the tensor to bring it to
+  # the representative range of float8 data type
+  # (as default cast is unsaturated)
+  qweight = (tensor * scale).clamp(min=finfo.min, max=finfo.max)
+  # Return both float8 data and the inverse scale (as float),
+  # as both required as inputs to torch._scaled_mm
+  qweight = qweight.to(dtype)
+  scale = scale.float().reciprocal()
+  return qweight, torch.tensor(scale, dtype=torch.float32)
+
+def per_expert_quantize(expert_weights: torch.Tensor, dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
+  assert expert_weights.ndim == 3
+  num_experts = expert_weights.shape[0]
+  output_weights = torch.zeros_like(expert_weights, dtype=dtype)
+  scales = torch.zeros(num_experts, dtype=torch.float32)
+  for e in range(num_experts):
+    output_weights[e], scales[e] = per_tensor_quantize(expert_weights[e], dtype)
+  return output_weights, scales
+
 def load_weights(model_files, dtype_str, metadata, tie_word_embeddings):
   """
   Load all weights from the model files in huggingface format into a dictionary of tensors,
@@ -171,47 +212,60 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings):
 
   # convert weights
   progress = 0
+  tensors = {}
   def conv(t):
     nonlocal progress
     progress += 1
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
-    return t.to(dtype)
+    if dtype not in [torch.float32, torch.float16]:
+      return per_tensor_quantize(t, dtype)
+    return t.to(dtype), None
+  def conv_experts(t):
+    nonlocal progress
+    progress += 1
+    print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
+    if dtype not in [torch.float32, torch.float16]:
+      return per_expert_quantize(t, dtype)
+    return t.to(dtype), None
+  def save_weight_and_scale(weight_name: str, scale_name: str, weight_and_scale: Tuple[torch.Tensor, torch.Tensor]):
+    tensors[weight_name] = weight_and_scale[0]
+    if weight_and_scale[1] is not None:
+      tensors[scale_name] = weight_and_scale[1]
 
-  tensors = {}
-  tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
+  save_weight_and_scale("model.embed.weight", "model.embed.scale", conv(weights["model.embed_tokens.weight"]))
 
   for l in range(config["num_hidden_layers"]):
     tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
     tensors[f"model.layers.{l}.attn.kv_a_norm.weight"] = weights[f"model.layers.{l}.self_attn.kv_a_layernorm.weight"].float()
 
-    tensors[f"model.layers.{l}.attn.wkv_a.weight"] = conv(weights[f"model.layers.{l}.self_attn.kv_a_proj_with_mqa.weight"])
-    tensors[f"model.layers.{l}.attn.wkv_b.weight"] = conv(weights[f"model.layers.{l}.self_attn.kv_b_proj.weight"])
-    tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.o_proj.weight"])
+    save_weight_and_scale(f"model.layers.{l}.attn.wkv_a.weight", f"model.layers.{l}.attn.wkv_a.scale", conv(weights[f"model.layers.{l}.self_attn.kv_a_proj_with_mqa.weight"]))
+    save_weight_and_scale(f"model.layers.{l}.attn.wkv_b.weight", f"model.layers.{l}.attn.wkv_b.scale", conv(weights[f"model.layers.{l}.self_attn.kv_b_proj.weight"]))
+    save_weight_and_scale(f"model.layers.{l}.attn.wo.weight", f"model.layers.{l}.attn.wo.scale", conv(weights[f"model.layers.{l}.self_attn.o_proj.weight"]))
     if metadata.q_lora_rank > 0:
-      tensors[f"model.layers.{l}.attn.wq_a.weight"] = conv(weights[f"model.layers.{l}.self_attn.q_a_proj.weight"])  
-      tensors[f"model.layers.{l}.attn.wq_b.weight"] = conv(weights[f"model.layers.{l}.self_attn.q_b_proj.weight"])
+      save_weight_and_scale(f"model.layers.{l}.attn.wq_a.weight", f"model.layers.{l}.attn.wq_a.scale", conv(weights[f"model.layers.{l}.self_attn.q_a_proj.weight"]))
+      save_weight_and_scale(f"model.layers.{l}.attn.wq_b.weight", f"model.layers.{l}.attn.wq_b.scale", conv(weights[f"model.layers.{l}.self_attn.q_b_proj.weight"]))
       tensors[f"model.layers.{l}.attn.q_a_norm.weight"] = weights[f"model.layers.{l}.self_attn.q_a_layernorm.weight"].float()
     else:
-      tensors[f"model.layers.{l}.attn.wq.weight"] = conv(weights[f"model.layers.{l}.self_attn.q_proj.weight"])
+      save_weight_and_scale(f"model.layers.{l}.attn.wq.weight", f"model.layers.{l}.attn.wq.scale", conv(weights[f"model.layers.{l}.self_attn.q_proj.weight"]))
 
     tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
 
     if l < metadata.first_k_dense_replace:
-      tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.gate_proj.weight"])
-      tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.down_proj.weight"])
-      tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"model.layers.{l}.mlp.up_proj.weight"])
+      save_weight_and_scale(f"model.layers.{l}.mlp.w1.weight", f"model.layers.{l}.mlp.w1.scale", conv(weights[f"model.layers.{l}.mlp.gate_proj.weight"]))
+      save_weight_and_scale(f"model.layers.{l}.mlp.w2.weight", f"model.layers.{l}.mlp.w2.scale", conv(weights[f"model.layers.{l}.mlp.down_proj.weight"]))
+      save_weight_and_scale(f"model.layers.{l}.mlp.w3.weight", f"model.layers.{l}.mlp.w3.scale", conv(weights[f"model.layers.{l}.mlp.up_proj.weight"]))
     else:
-      tensors[f"model.layers.{l}.moegate.weight"] = conv(weights[f"model.layers.{l}.mlp.gate.weight"])
-      tensors[f"model.layers.{l}.mlp.w1.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.gate_proj.weight"]) for e in range(metadata.n_routed_experts)])
-      tensors[f"model.layers.{l}.mlp.w2.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.down_proj.weight"]) for e in range(metadata.n_routed_experts)])
-      tensors[f"model.layers.{l}.mlp.w3.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.up_proj.weight"]) for e in range(metadata.n_routed_experts)])
-      tensors[f"model.layers.{l}.shared_mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.shared_experts.gate_proj.weight"])
-      tensors[f"model.layers.{l}.shared_mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.shared_experts.down_proj.weight"])
-      tensors[f"model.layers.{l}.shared_mlp.w3.weight"] = conv(weights[f"model.layers.{l}.mlp.shared_experts.up_proj.weight"])
+      save_weight_and_scale(f"model.layers.{l}.moegate.weight", f"model.layers.{l}.moegate.scale", conv(weights[f"model.layers.{l}.mlp.gate.weight"]))
+      save_weight_and_scale(f"model.layers.{l}.mlp.w1.weight", f"model.layers.{l}.mlp.w1.scale", conv_experts(torch.stack([weights[f"model.layers.{l}.mlp.experts.{e}.gate_proj.weight"] for e in range(metadata.n_routed_experts)])))
+      save_weight_and_scale(f"model.layers.{l}.mlp.w2.weight", f"model.layers.{l}.mlp.w2.scale", conv_experts(torch.stack([weights[f"model.layers.{l}.mlp.experts.{e}.down_proj.weight"] for e in range(metadata.n_routed_experts)])))
+      save_weight_and_scale(f"model.layers.{l}.mlp.w3.weight", f"model.layers.{l}.mlp.w3.scale", conv_experts(torch.stack([weights[f"model.layers.{l}.mlp.experts.{e}.up_proj.weight"] for e in range(metadata.n_routed_experts)])))
+      save_weight_and_scale(f"model.layers.{l}.shared_mlp.w1.weight", f"model.layers.{l}.shared_mlp.w1.scale", conv(weights[f"model.layers.{l}.mlp.shared_experts.gate_proj.weight"]))
+      save_weight_and_scale(f"model.layers.{l}.shared_mlp.w2.weight", f"model.layers.{l}.shared_mlp.w2.scale", conv(weights[f"model.layers.{l}.mlp.shared_experts.down_proj.weight"]))
+      save_weight_and_scale(f"model.layers.{l}.shared_mlp.w3.weight", f"model.layers.{l}.shared_mlp.w3.scale", conv(weights[f"model.layers.{l}.mlp.shared_experts.up_proj.weight"]))
 
   tensors["model.norm.weight"] = weights["model.norm.weight"].float()
   if tie_word_embeddings == False:
-    tensors["model.output.weight"] = conv(weights["lm_head.weight"])
+    save_weight_and_scale("model.output.weight", "model.output.scale", conv(weights["lm_head.weight"]))
   else:
     # Model output classifier just uses the word embeddings matrix
     pass
