@@ -171,18 +171,31 @@ Block::Block(
   const Tensor* rms_kv_a_weight,
   const Tensor* rms_ffn_weight,
   const Tensor* wq,
+  const Tensor* sq,
   const Tensor* wq_a,
+  const Tensor* sq_a,
   const Tensor* wq_b,
+  const Tensor* sq_b,
   const Tensor* wkv_a,
+  const Tensor* skv_a,
   const Tensor* wkv_b,
+  const Tensor* skv_b,
   const Tensor* wo,
+  const Tensor* so,
   const Tensor* w1,
+  const Tensor* s1,
   const Tensor* w2,
+  const Tensor* s2,
   const Tensor* w3,
+  const Tensor* s3,
   const Tensor* shared_w1,
+  const Tensor* shared_s1,
   const Tensor* shared_w2,
+  const Tensor* shared_s2,
   const Tensor* shared_w3,
-  const Tensor* moegate
+  const Tensor* shared_s3,
+  const Tensor* moegate,
+  const Tensor* moegate_scale
 ) {
   _layer_i = layer_i;
   _config = config;
@@ -270,6 +283,65 @@ Block::Block(
     _w3 = check_tensor(
       w3, config->weight_dtype, {config->hidden_dim, config->dim, 0, 0}
     );
+  }
+
+  if (_config->weight_dtype == DType::F8E5M2) {
+    if (config->q_lora_rank > 0) {
+      _sq_a = static_cast<float*>(check_tensor(
+        sq_a, DType::F32, {1, 0, 0, 0}
+      ));
+      _sq_b = static_cast<float*>(check_tensor(
+        sq_b, DType::F32, {1, 0, 0, 0}
+      ));
+    } else {
+      _sq = static_cast<float*>(check_tensor(
+        sq, DType::F32, {1, 0, 0, 0}
+      ));
+    }
+    _skv_a = static_cast<float*>(check_tensor(
+      skv_a, DType::F32, {1, 0, 0, 0}
+    ));
+    _skv_b = static_cast<float*>(check_tensor(
+      skv_b, DType::F32, {1, 0, 0, 0}
+    ));
+    _so = static_cast<float*>(check_tensor(
+      so, DType::F32, {1, 0, 0, 0}
+    ));
+    if (config->n_routed_experts > 0 && layer_i >= config->first_k_dense_replace) {
+      _moegate_scale = static_cast<float*>(check_tensor(
+        moegate_scale, DType::F32, {1, 0, 0, 0}
+      ));
+      _s1 = static_cast<float*>(check_tensor(
+        s1, DType::F32, {config->n_routed_experts, 0, 0, 0}
+      ));
+      _s2 = static_cast<float*>(check_tensor(
+        s2, DType::F32, {config->n_routed_experts, 0, 0, 0}
+      ));
+      _s3 = static_cast<float*>(check_tensor(
+        s3, DType::F32, {config->n_routed_experts, 0, 0, 0}
+      ));
+      if (config->n_shared_experts > 0) {
+        _shared_s1 = static_cast<float*>(check_tensor(
+          shared_s1, DType::F32, {1, 0, 0, 0}
+        ));
+        _shared_s2 = static_cast<float*>(check_tensor(
+          shared_s2, DType::F32, {1, 0, 0, 0}
+        ));
+        _shared_s3 = static_cast<float*>(check_tensor(
+          shared_s3, DType::F32, {1, 0, 0, 0}
+        ));
+      }
+    } else {
+      _s1 = static_cast<float*>(check_tensor(
+        s1, DType::F32, {1, 0, 0, 0}
+      ));
+      _s2 = static_cast<float*>(check_tensor(
+        s2, DType::F32, {1, 0, 0, 0}
+      ));
+      _s3 = static_cast<float*>(check_tensor(
+        s3, DType::F32, {1, 0, 0, 0}
+      ));
+    }
   }
 
   _key_cache = new f16_t[config->max_seq_len * config->n_kv_heads * config->head_dim]();
@@ -372,11 +444,20 @@ Model::Model(YALMData& yalm, int context) {
   config->from_yalm(yalm, context);
   std::cout << "loading model with dtype: " << dtype_to_string(config->weight_dtype) << std::endl;
 
+  bool need_weight_scales = config->weight_dtype == DType::F8E5M2;
+
   token_embedding_table = check_tensor(
     get_tensor(yalm, "model.embed.weight"), 
     config->weight_dtype,
     {config->vocab_size, config->dim, 0, 0}
   );
+  if (need_weight_scales) {
+    token_embedding_scale = static_cast<float*>(check_tensor(
+      get_tensor(yalm, "model.embed.scale"), 
+      DType::F32,
+      {1, 0, 0, 0}
+    ));
+  }
 
   for (int i = 0; i < config->n_layers; ++i) {
     blocks.emplace_back(std::make_shared<Block>(
@@ -387,18 +468,31 @@ Model::Model(YALMData& yalm, int context) {
       get_tensor(yalm, fmt::format("model.layers.{}.attn.kv_a_norm.weight", i)),
       get_tensor(yalm, fmt::format("model.layers.{}.mlp.norm.weight", i)),
       config->q_lora_rank == 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq.weight", i)) : nullptr,
+      need_weight_scales && config->q_lora_rank == 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq.scale", i)) : nullptr,
       config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_a.weight", i)) : nullptr,
+      need_weight_scales && config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_a.scale", i)) : nullptr,
       config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_b.weight", i)) : nullptr,
+      need_weight_scales && config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_b.scale", i)) : nullptr,
       get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_a.weight", i)),
+      need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_a.scale", i)) : nullptr,
       get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_b.weight", i)),
+      need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_b.scale", i)) : nullptr,
       get_tensor(yalm, fmt::format("model.layers.{}.attn.wo.weight", i)),
+      need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wo.scale", i)) : nullptr,
       get_tensor(yalm, fmt::format("model.layers.{}.mlp.w1.weight", i)),
+      need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.mlp.w1.scale", i)) : nullptr,
       get_tensor(yalm, fmt::format("model.layers.{}.mlp.w2.weight", i)),
+      need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.mlp.w2.scale", i)) : nullptr,
       get_tensor(yalm, fmt::format("model.layers.{}.mlp.w3.weight", i)),
+      need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.mlp.w3.scale", i)) : nullptr,
       i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w1.weight", i)) : nullptr,
+      need_weight_scales && i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w1.scale", i)) : nullptr,
       i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w2.weight", i)) : nullptr,
+      need_weight_scales && i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w2.scale", i)) : nullptr,
       i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w3.weight", i)) : nullptr,
-      i >= config->first_k_dense_replace && config->n_routed_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.weight", i)) : nullptr
+      need_weight_scales && i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w3.scale", i)) : nullptr,
+      i >= config->first_k_dense_replace && config->n_routed_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.weight", i)) : nullptr,
+      need_weight_scales && i >= config->first_k_dense_replace && config->n_routed_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.scale", i)) : nullptr
     ));
   }
 
@@ -410,12 +504,20 @@ Model::Model(YALMData& yalm, int context) {
   bool tie_word_embeddings = yalm.tensors.count("model.output.weight") == 0;
   if (tie_word_embeddings) {
     wcls = token_embedding_table;
+    scls = token_embedding_scale;
   } else {
     wcls = check_tensor(
       get_tensor(yalm, "model.output.weight"), 
       config->weight_dtype, 
       {config->vocab_size, config->dim, 0, 0}
     );
+    if (need_weight_scales) {
+      scls = static_cast<float*>(check_tensor(
+        get_tensor(yalm, "model.output.scale"), 
+        DType::F32, 
+        {1, 0, 0, 0}
+      ));
+    }
   }
 }
 

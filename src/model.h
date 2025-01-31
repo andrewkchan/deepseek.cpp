@@ -157,18 +157,31 @@ struct Block {
     const Tensor* rms_kv_a_weight,
     const Tensor* rms_ffn_weight,
     const Tensor* wq,
+    const Tensor* sq,
     const Tensor* wq_a,
+    const Tensor* sq_a,
     const Tensor* wq_b,
+    const Tensor* sq_b,
     const Tensor* wkv_a,
+    const Tensor* skv_a,
     const Tensor* wkv_b,
+    const Tensor* skv_b,
     const Tensor* wo,
+    const Tensor* so,
     const Tensor* w1,
+    const Tensor* s1,
     const Tensor* w2,
+    const Tensor* s2,
     const Tensor* w3,
+    const Tensor* s3,
     const Tensor* shared_w1,
+    const Tensor* shared_s1,
     const Tensor* shared_w2,
+    const Tensor* shared_s2,
     const Tensor* shared_w3,
-    const Tensor* moegate
+    const Tensor* shared_s3,
+    const Tensor* moegate,
+    const Tensor* moegate_scale
   );
   ~Block();
 
@@ -242,21 +255,34 @@ private:
 
   // weights for self-attention matmuls
   void* _wq = nullptr; // (n_heads * head_dim, dim)
+  float* _sq = nullptr; // (1,)
   void* _wq_a = nullptr; // (q_lora_rank, dim)
+  float* _sq_a = nullptr; // (1,)
   void* _wq_b = nullptr; // (n_heads * head_dim, q_lora_rank)
+  float* _sq_b = nullptr; // (1,)
   void* _wkv_a = nullptr; // (kv_lora_rank + qk_rope_head_dim, dim)
+  float* _skv_a = nullptr; // (1,)
   void* _wkv_b = nullptr; // (n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim), kv_lora_rank)
+  float* _skv_b = nullptr; // (1,)
   void* _wo = nullptr; // (dim, n_heads * v_head_dim)
-  
+  float* _so = nullptr; // (1,)
+
   // weights for ffn
   void* _w1 = nullptr; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
+  float* _s1 = nullptr; // (n_routed_experts,) or (1,)
   void* _w2 = nullptr; // (n_routed_experts?, dim, moe_intermediate_size) or (dim, hidden_dim)
+  float* _s2 = nullptr; // (n_routed_experts,) or (1,)
   void* _w3 = nullptr; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
+  float* _s3 = nullptr; // (n_routed_experts,) or (1,)
   void* _shared_w1 = nullptr; // (n_shared_experts?, moe_intermediate_size, dim)
+  float* _shared_s1 = nullptr; // (1,)
   void* _shared_w2 = nullptr; // (n_shared_experts?, dim, moe_intermediate_size)
+  float* _shared_s2 = nullptr; // (1,)
   void* _shared_w3 = nullptr; // (n_shared_experts?, moe_intermediate_size, dim)
+  float* _shared_s3 = nullptr; // (1,)
   // weights for mixture of experts router if present
   void* _moegate = nullptr; // (n_routed_experts?, dim)
+  float* _moegate_scale = nullptr; // (1,)
 
   // kv cache
   f16_t* _key_cache = nullptr;   // (seq_len, n_kv_heads * head_dim)
@@ -270,10 +296,12 @@ struct Model {
   
   // token embedding table
   void* token_embedding_table = nullptr; // (vocab_size, dim)
+  float* token_embedding_scale = nullptr; // (1,)
   // final norm
   float* rms_final_weight = nullptr; // (dim,)
   // classifier weights for the logits, on the last layer
   void* wcls = nullptr; // (vocab_size, dim)
+  float* scls = nullptr; // (1,)
 
   Model(YALMData& yalm, int context = 0);
   

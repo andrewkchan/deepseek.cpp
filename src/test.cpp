@@ -201,7 +201,7 @@ void test_matmul() {
   }
   {
     std::vector<float> xout(2);
-    matmul_cpu(xout.data(), x.data(), w_f8e5m2.data(), 16, 2);
+    matmul_cpu(xout.data(), x.data(), w_f8e5m2.data(), 16, 2, 1.0f);
     assertArrayEquals(xout, {
       -3.7454, -3.2738
     }, "matmul_f8e5m2", 2.21e-1);
