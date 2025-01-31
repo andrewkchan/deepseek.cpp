@@ -183,7 +183,7 @@ def per_tensor_quantize(tensor: torch.Tensor, dtype: torch.dtype) -> Tuple[torch
   # as both required as inputs to torch._scaled_mm
   qweight = qweight.to(dtype)
   scale = scale.float().reciprocal()
-  return qweight, torch.tensor(scale, dtype=torch.float32)
+  return qweight, scale
 
 def per_expert_quantize(expert_weights: torch.Tensor, dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
   assert expert_weights.ndim == 3
