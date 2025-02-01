@@ -50,6 +50,7 @@ void Config::from_yalm(YALMData& yalm, int context) {
     std::cerr << "unsupported topk_method '" << topk_method_str << "', defaulting to greedy" << std::endl;
     topk_method = TopKMethod::GREEDY;
   }
+  has_moegate_bias = yalm.metadata.at("arch").get<std::string>() == "DeepseekV3ForCausalLM";
   // multi-latent attention
   kv_lora_rank = yalm.metadata.contains("kv_lora_rank") ? std::stoi(yalm.metadata.at("kv_lora_rank").get<std::string>()) : 0;
   q_lora_rank = yalm.metadata.contains("q_lora_rank") ? std::stoi(yalm.metadata.at("q_lora_rank").get<std::string>()) : 0;
@@ -195,7 +196,8 @@ Block::Block(
   const Tensor* shared_w3,
   const Tensor* shared_s3,
   const Tensor* moegate,
-  const Tensor* moegate_scale
+  const Tensor* moegate_scale,
+  const Tensor* moegate_bias
 ) {
   _layer_i = layer_i;
   _config = config;
@@ -253,6 +255,9 @@ Block::Block(
     _moegate = check_tensor(
       moegate, config->weight_dtype, {config->n_routed_experts, config->dim, 0, 0}
     );
+    _moegate_bias = static_cast<float*>(check_tensor(
+      moegate_bias, DType::F32, {config->n_routed_experts, 0, 0, 0}
+    ));
     _w1 = check_tensor(
       w1, config->weight_dtype, {config->n_routed_experts, config->moe_intermediate_size, config->dim, 0}
     );
@@ -492,7 +497,8 @@ Model::Model(YALMData& yalm, int context) {
       i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w3.weight", i)) : nullptr,
       need_weight_scales && i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w3.scale", i)) : nullptr,
       i >= config->first_k_dense_replace && config->n_routed_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.weight", i)) : nullptr,
-      need_weight_scales && i >= config->first_k_dense_replace && config->n_routed_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.scale", i)) : nullptr
+      need_weight_scales && i >= config->first_k_dense_replace && config->n_routed_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.scale", i)) : nullptr,
+      i >= config->first_k_dense_replace && config->n_routed_experts > 0 && config->has_moegate_bias ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.bias", i)) : nullptr
     ));
   }
 

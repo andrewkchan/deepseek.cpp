@@ -18,7 +18,7 @@ SUPPORTED_ARCHITECTURES = [
   # TODO: Llama (deepseek 1)?
   # TODO: DeepseekForCausalLM
   "DeepseekV2ForCausalLM",
-  # TODO: DeepseekV3ForCausalLM
+  "DeepseekV3ForCausalLM",
 ]
 SUPPORTED_DTYPES = ["fp32", "fp16", "f8e5m2"]
 
@@ -31,7 +31,7 @@ class Metadata:
     if dtype not in SUPPORTED_DTYPES:
       raise Exception(f"Data type {dtype} is not supported, must be one of {SUPPORTED_DTYPES}")
     self.dtype = dtype
-    if arch in ["DeepseekV2ForCausalLM"]:
+    if arch in ["DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM"]:
       self.dim = config["hidden_size"]
       self.hidden_dim = config["intermediate_size"]
       self.n_layers = config["num_hidden_layers"]
@@ -75,13 +75,14 @@ class Metadata:
       self.scoring_func = config["scoring_func"]
       self.topk_group = config["topk_group"]
       self.topk_method = config["topk_method"]
-      assert self.topk_method != "noaux_tc" # TODO: support for Deepseek v3
+      if self.topk_method == "noaux_tc":
+        self.topk_method = "group_limited_greedy" # TODO: support for Deepseek v3
   
   def to_dict(self):
     result = {}
     result["arch"] = self.arch
     result["dtype"] = self.dtype
-    if self.arch in ["DeepseekV2ForCausalLM"]:
+    if self.arch in ["DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM"]:
       result["dim"] = str(self.dim)
       result["hidden_dim"] = str(self.hidden_dim)
       result["n_layers"] = str(self.n_layers)

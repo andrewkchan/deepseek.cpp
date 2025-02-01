@@ -63,6 +63,7 @@ struct Config {
   ScoringFunc scoring_func;
   int topk_group;
   TopKMethod topk_method;
+  bool has_moegate_bias;
   // multi-latent attention
   int kv_lora_rank;
   int q_lora_rank;
@@ -181,7 +182,8 @@ struct Block {
     const Tensor* shared_w3,
     const Tensor* shared_s3,
     const Tensor* moegate,
-    const Tensor* moegate_scale
+    const Tensor* moegate_scale,
+    const Tensor* moegate_bias
   );
   ~Block();
 
@@ -283,6 +285,7 @@ private:
   // weights for mixture of experts router if present
   void* _moegate = nullptr; // (n_routed_experts?, dim)
   float* _moegate_scale = nullptr; // (1,)
+  float* _moegate_bias = nullptr; // (n_routed_experts,)
 
   // kv cache
   f16_t* _key_cache = nullptr;   // (seq_len, n_kv_heads * head_dim)

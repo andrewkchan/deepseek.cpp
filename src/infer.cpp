@@ -542,6 +542,11 @@ void Block::_block_cpu(
   if (c.n_routed_experts > 0 && moegate<T>() != nullptr) {
     // Block is a sparse MoE FFN layer
     matmul(s.moe_weights(), s.xb(), moegate<T>(), c.dim, c.n_routed_experts, _moegate_scale ? _moegate_scale[0] : 1.0f);
+    if (_moegate_bias) {
+      for (int i = 0; i < c.n_routed_experts; ++i) {
+        s.moe_weights()[i] += _moegate_bias[i];
+      }
+    }
     moe_gate(
       s.active_experts_weights(), s.active_experts(), s.moe_weights(), 
       c.n_routed_experts, c.n_active_routed, c.norm_topk_prob, c.routed_scaling_factor,
