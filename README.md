@@ -8,9 +8,9 @@ I was initially adding DeepSeek support to `yalm` but realized that the changes 
 
 | Model      | F8E5M2 | F8E4M3 | FP16 | BF16 | FP32 |
 | -----      | ------ | ------ | ---- | ---- | ---- |
-| DeepSeek-V2-Lite | WIP | WIP | ✅ | WIP | ✅ |
-| DeepSeek-V2 | WIP | WIP | ✅ | WIP | ✅ |
-| DeepSeek-V2.5 | WIP | WIP | ✅ | WIP | ✅ |
+| DeepSeek-V2-Lite | ✅ | WIP | ✅ | WIP | ✅ |
+| DeepSeek-V2 | ✅ | WIP | ✅ | WIP | ✅ |
+| DeepSeek-V2.5 | ✅ | WIP | ✅ | WIP | ✅ |
 | DeepSeek-V3 | WIP | WIP | - | - | - |
 
 # Instructions
