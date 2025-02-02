@@ -215,7 +215,7 @@ def per_expert_quantize(expert_weights: torch.Tensor, dtype: torch.dtype) -> Tup
     output_weights[e], scales[e] = per_tensor_quantize(expert_weights[e], dtype)
   return output_weights, scales
 
-def load_weights(model_files, dtype_str, metadata, tie_word_embeddings):
+def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers):
   """
   Load all weights from the model files in huggingface format into a dictionary of tensors,
   normalizing the attention weights, and casting all tensors (except for all layer norm weights,
@@ -272,6 +272,9 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings):
   )
 
   for l in range(config["num_hidden_layers"]):
+    if n_layers is not None and l >= n_layers:
+      break
+    
     tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
     tensors[f"model.layers.{l}.attn.kv_a_norm.weight"] = weights[f"model.layers.{l}.self_attn.kv_a_layernorm.weight"].float()
 
@@ -378,6 +381,7 @@ if __name__ == "__main__":
   argp.add_argument("output", type=str)
   argp.add_argument("input", type=str, nargs="?")
   argp.add_argument("--dtype", type=str, default="fp16", choices=SUPPORTED_DTYPES)
+  argp.add_argument("--n-layers", type=int, default=None, help="number of layers to convert (if None, convert all)")
   args = argp.parse_args()
 
   if args.input is not None:
@@ -405,7 +409,7 @@ if __name__ == "__main__":
     metadata = Metadata(config, args.dtype)
 
   tokens = load_tokens(args.tokenizer, metadata.vocab_size)
-  tensors = load_weights(args.models, args.dtype, metadata, config.get("tie_word_embeddings", None))
+  tensors = load_weights(args.models, args.dtype, metadata, config.get("tie_word_embeddings", None), args.n_layers)
 
   # add tokenizer tensors at the end (to maximize the chance of model tensor alignment)
   # note: we concatenate all bytes of all tokens into a single tensor
