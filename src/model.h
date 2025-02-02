@@ -209,8 +209,7 @@ struct Block {
   T* w2() const { return static_cast<T*>(_w2); }
   template <typename T>
   T* w3() const { return static_cast<T*>(_w3); }
-  template <typename T>
-  T* moegate() const { return static_cast<T*>(_moegate); }
+  float* moegate() const { return _moegate; }
   template <typename T>
   T* shared_w1() const { return static_cast<T*>(_shared_w1); }
   template <typename T>
@@ -283,7 +282,7 @@ private:
   void* _shared_w3 = nullptr; // (n_shared_experts?, moe_intermediate_size, dim)
   float* _shared_s3 = nullptr; // (1,)
   // weights for mixture of experts router if present
-  void* _moegate = nullptr; // (n_routed_experts?, dim)
+  float* _moegate = nullptr; // (n_routed_experts?, dim)
   float* _moegate_scale = nullptr; // (1,)
   float* _moegate_bias = nullptr; // (n_routed_experts,)
 
