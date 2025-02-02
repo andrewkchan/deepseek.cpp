@@ -323,7 +323,9 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings):
         f"model.layers.{l}.moegate.weight", f"model.layers.{l}.moegate.scale", 
         conv(f"model.layers.{l}.mlp.gate.weight", f"model.layers.{l}.mlp.gate.weight_scale_inv")
       )
-      tensors[f"model.layers.{l}.moegate.bias"] = weights[f"model.layers.{l}.mlp.gate.e_score_correction_bias"].float()
+      if metadata.arch == "DeepseekV3ForCausalLM":
+        tensors[f"model.layers.{l}.moegate.bias"] = weights[f"model.layers.{l}.mlp.gate.e_score_correction_bias"].float()
+      
       save_weight_and_scale(
         f"model.layers.{l}.mlp.w1.weight", f"model.layers.{l}.mlp.w1.scale", 
         conv_experts([
