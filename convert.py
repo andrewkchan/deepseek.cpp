@@ -276,7 +276,7 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers
   for l in range(config["num_hidden_layers"]):
     if n_layers is not None and l >= n_layers:
       break
-    
+
     tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
     tensors[f"model.layers.{l}.attn.kv_a_norm.weight"] = weights[f"model.layers.{l}.self_attn.kv_a_layernorm.weight"].float()
 
@@ -324,10 +324,7 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers
         conv(f"model.layers.{l}.mlp.up_proj.weight", f"model.layers.{l}.mlp.up_proj.weight_scale_inv")
       )
     else:
-      save_weight_and_scale(
-        f"model.layers.{l}.moegate.weight", f"model.layers.{l}.moegate.scale", 
-        conv(f"model.layers.{l}.mlp.gate.weight", f"model.layers.{l}.mlp.gate.weight_scale_inv")
-      )
+      tensors[f"model.layers.{l}.moegate.weight"] = weights[f"model.layers.{l}.mlp.gate.weight"].float()
       if metadata.arch == "DeepseekV3ForCausalLM":
         tensors[f"model.layers.{l}.moegate.bias"] = weights[f"model.layers.{l}.mlp.gate.e_score_correction_bias"].float()
       

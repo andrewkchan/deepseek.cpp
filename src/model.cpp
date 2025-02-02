@@ -113,7 +113,8 @@ size_t Config::active_bytes(size_t pos) const {
   bytes_per_block += n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim) * kv_lora_rank * weight_size; // wkv_b
   bytes_per_block += n_heads * v_head_dim * dim * weight_size; // wo
   if (n_routed_experts > 0) {
-    bytes_per_block += n_routed_experts * dim * weight_size; // moegate
+    bytes_per_block += n_routed_experts * dim * sizeof(float); // moegate
+    bytes_per_block += n_routed_experts * sizeof(float); // moegate_bias
     bytes_per_block += n_active_routed * 3 * dim * moe_intermediate_size * weight_size; // w1, w2, w3
   } else {
     bytes_per_block += 3 * dim * hidden_dim * weight_size; // w1, w2, w3
@@ -124,6 +125,7 @@ size_t Config::active_bytes(size_t pos) const {
   size_t kv_len = std::min(static_cast<size_t>(max_seq_len), pos + 1);
   size_t kv_entry_size = sizeof(f16_t);
   bytes_per_block += 2 * kv_len * n_kv_heads * head_dim * kv_entry_size; // key_cache, value_cache
+  // TODO: add weight scales
 
   size_t bytes = 0;
   bytes += dim * weight_size; // 1 row of token_embedding_table
@@ -252,9 +254,9 @@ Block::Block(
   );
 
   if (config->n_routed_experts > 0 && layer_i >= config->first_k_dense_replace) {
-    _moegate = check_tensor(
-      moegate, config->weight_dtype, {config->n_routed_experts, config->dim, 0, 0}
-    );
+    _moegate = static_cast<float*>(check_tensor(
+      moegate, DType::F32, {config->n_routed_experts, config->dim, 0, 0}
+    ));
     if (moegate_bias != nullptr) {
       _moegate_bias = static_cast<float*>(check_tensor(
         moegate_bias, DType::F32, {config->n_routed_experts, 0, 0, 0}
