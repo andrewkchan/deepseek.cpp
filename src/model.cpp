@@ -136,9 +136,9 @@ size_t Config::active_bytes(size_t pos) const {
   return bytes;
 }
 
-void* check_tensor(const Tensor* tensor, DType weight_dtype, std::array<int, 4> shape) {
+void* check_tensor(const Tensor* tensor, DType weight_dtype, std::array<int, 4> shape, const int debug_line) {
   if (tensor == nullptr) {
-    std::cerr << "FATAL: missing tensor" << std::endl;
+    std::cerr << "FATAL: missing tensor at line " << debug_line << std::endl;
     assert(false);
     return nullptr;
   }
@@ -217,138 +217,138 @@ Block::Block(
   }
 
   _rms_att_weight = static_cast<float*>(check_tensor(
-    rms_att_weight, DType::F32, {config->dim, 0, 0, 0}
+    rms_att_weight, DType::F32, {config->dim, 0, 0, 0}, __LINE__
   ));
   if (config->q_lora_rank > 0) {
     _rms_q_a_weight = static_cast<float*>(check_tensor(
-      rms_q_a_weight, DType::F32, {config->q_lora_rank, 0, 0, 0}
+      rms_q_a_weight, DType::F32, {config->q_lora_rank, 0, 0, 0}, __LINE__
     ));
   }
   _rms_kv_a_weight = static_cast<float*>(check_tensor(
-    rms_kv_a_weight, DType::F32, {config->kv_lora_rank, 0, 0, 0}
+    rms_kv_a_weight, DType::F32, {config->kv_lora_rank, 0, 0, 0}, __LINE__
   ));
   _rms_ffn_weight = static_cast<float*>(check_tensor(
-    rms_ffn_weight, DType::F32, {config->dim, 0, 0, 0}
+    rms_ffn_weight, DType::F32, {config->dim, 0, 0, 0}, __LINE__
   ));
 
   if (config->q_lora_rank > 0) {
     _wq_a = check_tensor(
-      wq_a, config->weight_dtype, {config->q_lora_rank, config->dim, 0, 0}
+      wq_a, config->weight_dtype, {config->q_lora_rank, config->dim, 0, 0}, __LINE__
     );
     _wq_b = check_tensor(
-      wq_b, config->weight_dtype, {config->n_heads * config->head_dim, config->q_lora_rank, 0, 0}
+      wq_b, config->weight_dtype, {config->n_heads * config->head_dim, config->q_lora_rank, 0, 0}, __LINE__
     );
   } else {
     _wq = check_tensor(
-      wq, config->weight_dtype, {config->n_heads * config->head_dim, config->dim, 0, 0}
+      wq, config->weight_dtype, {config->n_heads * config->head_dim, config->dim, 0, 0}, __LINE__
     );
   }
   _wkv_a = check_tensor(
-    wkv_a, config->weight_dtype, {config->kv_lora_rank + config->qk_rope_head_dim, config->dim, 0, 0}
+    wkv_a, config->weight_dtype, {config->kv_lora_rank + config->qk_rope_head_dim, config->dim, 0, 0}, __LINE__
   );
   _wkv_b = check_tensor(
-    wkv_b, config->weight_dtype, {config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim), config->kv_lora_rank, 0, 0}
+    wkv_b, config->weight_dtype, {config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim), config->kv_lora_rank, 0, 0}, __LINE__
   );
   _wo = check_tensor(
-    wo, config->weight_dtype, {config->dim, config->n_heads * config->v_head_dim, 0, 0}
+    wo, config->weight_dtype, {config->dim, config->n_heads * config->v_head_dim, 0, 0}, __LINE__
   );
 
   if (config->n_routed_experts > 0 && layer_i >= config->first_k_dense_replace) {
     _moegate = static_cast<float*>(check_tensor(
-      moegate, DType::F32, {config->n_routed_experts, config->dim, 0, 0}
+      moegate, DType::F32, {config->n_routed_experts, config->dim, 0, 0}, __LINE__
     ));
     if (moegate_bias != nullptr) {
       _moegate_bias = static_cast<float*>(check_tensor(
-        moegate_bias, DType::F32, {config->n_routed_experts, 0, 0, 0}
+        moegate_bias, DType::F32, {config->n_routed_experts, 0, 0, 0}, __LINE__
       ));
     }
     _w1 = check_tensor(
-      w1, config->weight_dtype, {config->n_routed_experts, config->moe_intermediate_size, config->dim, 0}
+      w1, config->weight_dtype, {config->n_routed_experts, config->moe_intermediate_size, config->dim, 0}, __LINE__
     );
     _w2 = check_tensor(
-      w2, config->weight_dtype, {config->n_routed_experts, config->dim, config->moe_intermediate_size, 0}
+      w2, config->weight_dtype, {config->n_routed_experts, config->dim, config->moe_intermediate_size, 0}, __LINE__
     );
     _w3 = check_tensor(
-      w3, config->weight_dtype, {config->n_routed_experts, config->moe_intermediate_size, config->dim, 0}
+      w3, config->weight_dtype, {config->n_routed_experts, config->moe_intermediate_size, config->dim, 0}, __LINE__
     );
     if (config->n_shared_experts > 0) {
       _shared_w1 = check_tensor(
-        shared_w1, config->weight_dtype, {config->n_shared_experts * config->moe_intermediate_size, config->dim, 0}
+        shared_w1, config->weight_dtype, {config->n_shared_experts * config->moe_intermediate_size, config->dim, 0}, __LINE__
       );
       _shared_w2 = check_tensor(
-        shared_w2, config->weight_dtype, {config->dim, config->n_shared_experts * config->moe_intermediate_size, 0}
+        shared_w2, config->weight_dtype, {config->dim, config->n_shared_experts * config->moe_intermediate_size, 0}, __LINE__
       );
       _shared_w3 = check_tensor(
-        shared_w3, config->weight_dtype, {config->n_shared_experts * config->moe_intermediate_size, config->dim, 0}
+        shared_w3, config->weight_dtype, {config->n_shared_experts * config->moe_intermediate_size, config->dim, 0}, __LINE__
       );
     }
   } else {
     _w1 = check_tensor(
-      w1, config->weight_dtype, {config->hidden_dim, config->dim, 0, 0}
+      w1, config->weight_dtype, {config->hidden_dim, config->dim, 0, 0}, __LINE__
     );
     _w2 = check_tensor(
-      w2, config->weight_dtype, {config->dim, config->hidden_dim, 0, 0}
+      w2, config->weight_dtype, {config->dim, config->hidden_dim, 0, 0}, __LINE__
     );
     _w3 = check_tensor(
-      w3, config->weight_dtype, {config->hidden_dim, config->dim, 0, 0}
+      w3, config->weight_dtype, {config->hidden_dim, config->dim, 0, 0}, __LINE__
     );
   }
 
   if (_config->weight_dtype == DType::F8E5M2) {
     if (config->q_lora_rank > 0) {
       _sq_a = static_cast<float*>(check_tensor(
-        sq_a, DType::F32, {0, 0, 0, 0}
+        sq_a, DType::F32, {0, 0, 0, 0}, __LINE__
       ));
       _sq_b = static_cast<float*>(check_tensor(
-        sq_b, DType::F32, {0, 0, 0, 0}
+        sq_b, DType::F32, {0, 0, 0, 0}, __LINE__
       ));
     } else {
       _sq = static_cast<float*>(check_tensor(
-        sq, DType::F32, {0, 0, 0, 0}
+        sq, DType::F32, {0, 0, 0, 0}, __LINE__
       ));
     }
     _skv_a = static_cast<float*>(check_tensor(
-      skv_a, DType::F32, {0, 0, 0, 0}
+      skv_a, DType::F32, {0, 0, 0, 0}, __LINE__
     ));
     _skv_b = static_cast<float*>(check_tensor(
-      skv_b, DType::F32, {0, 0, 0, 0}
+      skv_b, DType::F32, {0, 0, 0, 0}, __LINE__
     ));
     _so = static_cast<float*>(check_tensor(
-      so, DType::F32, {0, 0, 0, 0}
+      so, DType::F32, {0, 0, 0, 0}, __LINE__
     ));
     if (config->n_routed_experts > 0 && layer_i >= config->first_k_dense_replace) {
       _moegate_scale = static_cast<float*>(check_tensor(
-        moegate_scale, DType::F32, {0, 0, 0, 0}
+        moegate_scale, DType::F32, {0, 0, 0, 0}, __LINE__
       ));
       _s1 = static_cast<float*>(check_tensor(
-        s1, DType::F32, {config->n_routed_experts, 0, 0, 0}
+        s1, DType::F32, {config->n_routed_experts, 0, 0, 0}, __LINE__
       ));
       _s2 = static_cast<float*>(check_tensor(
-        s2, DType::F32, {config->n_routed_experts, 0, 0, 0}
+        s2, DType::F32, {config->n_routed_experts, 0, 0, 0}, __LINE__
       ));
       _s3 = static_cast<float*>(check_tensor(
-        s3, DType::F32, {config->n_routed_experts, 0, 0, 0}
+        s3, DType::F32, {config->n_routed_experts, 0, 0, 0}, __LINE__
       ));
       if (config->n_shared_experts > 0) {
         _shared_s1 = static_cast<float*>(check_tensor(
-          shared_s1, DType::F32, {0, 0, 0, 0}
+          shared_s1, DType::F32, {0, 0, 0, 0}, __LINE__
         ));
         _shared_s2 = static_cast<float*>(check_tensor(
-          shared_s2, DType::F32, {0, 0, 0, 0}
+          shared_s2, DType::F32, {0, 0, 0, 0}, __LINE__
         ));
         _shared_s3 = static_cast<float*>(check_tensor(
-          shared_s3, DType::F32, {0, 0, 0, 0}
+          shared_s3, DType::F32, {0, 0, 0, 0}, __LINE__
         ));
       }
     } else {
       _s1 = static_cast<float*>(check_tensor(
-        s1, DType::F32, {0, 0, 0, 0}
+        s1, DType::F32, {0, 0, 0, 0}, __LINE__
       ));
       _s2 = static_cast<float*>(check_tensor(
-        s2, DType::F32, {0, 0, 0, 0}
+        s2, DType::F32, {0, 0, 0, 0}, __LINE__
       ));
       _s3 = static_cast<float*>(check_tensor(
-        s3, DType::F32, {0, 0, 0, 0}
+        s3, DType::F32, {0, 0, 0, 0}, __LINE__
       ));
     }
   }
@@ -458,13 +458,15 @@ Model::Model(YALMData& yalm, int context) {
   token_embedding_table = check_tensor(
     get_tensor(yalm, "model.embed.weight"), 
     config->weight_dtype,
-    {config->vocab_size, config->dim, 0, 0}
+    {config->vocab_size, config->dim, 0, 0},
+    __LINE__
   );
   if (need_weight_scales) {
     token_embedding_scale = static_cast<float*>(check_tensor(
       get_tensor(yalm, "model.embed.scale"), 
       DType::F32,
-      {0, 0, 0, 0}
+      {0, 0, 0, 0},
+      __LINE__
     ));
   }
 
@@ -509,7 +511,8 @@ Model::Model(YALMData& yalm, int context) {
   rms_final_weight = static_cast<float*>(check_tensor(
     get_tensor(yalm, "model.norm.weight"), 
     DType::F32, 
-    {config->dim, 0, 0, 0}
+    {config->dim, 0, 0, 0},
+    __LINE__
   ));
   bool tie_word_embeddings = yalm.tensors.count("model.output.weight") == 0;
   if (tie_word_embeddings) {
@@ -519,13 +522,15 @@ Model::Model(YALMData& yalm, int context) {
     wcls = check_tensor(
       get_tensor(yalm, "model.output.weight"), 
       config->weight_dtype, 
-      {config->vocab_size, config->dim, 0, 0}
+      {config->vocab_size, config->dim, 0, 0},
+      __LINE__
     );
     if (need_weight_scales) {
       scls = static_cast<float*>(check_tensor(
         get_tensor(yalm, "model.output.scale"), 
         DType::F32, 
-        {0, 0, 0, 0}
+        {0, 0, 0, 0},
+        __LINE__
       ));
     }
   }
