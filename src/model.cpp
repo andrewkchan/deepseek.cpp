@@ -255,9 +255,11 @@ Block::Block(
     _moegate = check_tensor(
       moegate, config->weight_dtype, {config->n_routed_experts, config->dim, 0, 0}
     );
-    _moegate_bias = static_cast<float*>(check_tensor(
-      moegate_bias, DType::F32, {config->n_routed_experts, 0, 0, 0}
-    ));
+    if (moegate_bias != nullptr) {
+      _moegate_bias = static_cast<float*>(check_tensor(
+        moegate_bias, DType::F32, {config->n_routed_experts, 0, 0, 0}
+      ));
+    }
     _w1 = check_tensor(
       w1, config->weight_dtype, {config->n_routed_experts, config->moe_intermediate_size, config->dim, 0}
     );
