@@ -65,32 +65,58 @@ static void save_debug_tensor(const std::string& name, T* x, size_t size) {
 }
 #endif
 
-static void matmul(float* xout, float* x, float* w, int n, int d, float scale) {
+static void matmul(float* xout, float* x, float* w, int n, int d, const int* block_size, float* scale) {
   // W (d,n) @ x (n,) -> xout (d,)
   int i;
+  static float one = 1.0f;
+  int dummy_block_size[2] = {n, d};
+  if (scale == nullptr) {
+    scale = &one;
+    block_size = dummy_block_size;
+  }
+  int scale_num_rows = (d + block_size[0] - 1) / block_size[0];
+  int scale_num_cols = (n + block_size[1] - 1) / block_size[1];
 #pragma omp parallel for private(i)
   for (i = 0; i < d; i++) {
+    int scale_i = i / block_size[0];
     float val = 0.0f;
     for (int j = 0; j < n; j++) {
-      val += w[i * n + j] * x[j];
+      int scale_j = j / block_size[1];
+      float scale_val = scale[scale_i * scale_num_cols + scale_j];
+      val += (w[i * n + j] * x[j]) * scale_val;
     }
-    xout[i] = val * scale;
+    xout[i] = val;
   }
 }
 
 // matmul supporting float16 weights via the F16C extension, which allows
 // conversion into float32 values before calculations.
-static void matmul(float* xout, float* x, f16_t* w, int n, int d, float scale) {
+static void matmul(float* xout, float* x, f16_t* w, int n, int d, const int* block_size, float* scale) {
 #if defined(__AVX2__) && defined(__F16C__)
   // W (d,n) @ x (n,) -> xout (d,)
   assert(n % 16 == 0);
+  assert(scale == nullptr || block_size[1] % 16 == 0);
   int i;
+  static float one = 1.0f;
+  int dummy_block_size[2] = {n, d};
+  if (scale == nullptr) {
+    scale = &one;
+    block_size = dummy_block_size;
+  }
+  int scale_num_rows = (d + block_size[0] - 1) / block_size[0];
+  int scale_num_cols = (n + block_size[1] - 1) / block_size[1];
 #pragma omp parallel for private(i)
   for (i = 0; i < d; i++) {
+    int scale_i = i / block_size[0];
     // Vectorized dot product of w[i][:] and x[:] where w is a packed float16 array.
     __m256 sumlo = _mm256_setzero_ps();
     __m256 sumhi = _mm256_setzero_ps();
     for (int j = 0; j < n; j+=16) {
+      int scale_j = j / block_size[1];
+      float scale_val = scale[scale_i * scale_num_cols + scale_j];
+      // Broadcast scale_val to all elements of a vector
+      __m256 scale_vec = _mm256_set1_ps(scale_val);
+      
       // Extract the next set of 16 float16 weights from `w` and store them
       // to two separate float32 vectors of width 8 (`wveclo_ps`, `wvechi_ps`)
       __m256i wvec = _mm256_loadu_si256((__m256i*)&w[i * n + j]);
@@ -98,9 +124,15 @@ static void matmul(float* xout, float* x, f16_t* w, int n, int d, float scale) {
       __m128i wvechi = _mm256_extractf128_si256(wvec, 1);
       __m256 wveclo_ps = _mm256_cvtph_ps(wveclo);
       __m256 wvechi_ps = _mm256_cvtph_ps(wvechi);
+      
+      // Scale the weight vectors
+      wveclo_ps = _mm256_mul_ps(wveclo_ps, scale_vec);
+      wvechi_ps = _mm256_mul_ps(wvechi_ps, scale_vec);
+      
       // Extract the next two float32 vectors of width 8 `xveclo`, `xvechi` from `x`
       __m256 xveclo = _mm256_loadu_ps(&x[j]);
       __m256 xvechi = _mm256_loadu_ps(&x[j + 8]);
+      
       // Compute vectorized FMAs: sumlo += wveclo * xveclo, sumhi += wvechi * xvechi
       sumlo = _mm256_fmadd_ps(wveclo_ps, xveclo, sumlo);
       sumhi = _mm256_fmadd_ps(wvechi_ps, xvechi, sumhi);
@@ -112,7 +144,7 @@ static void matmul(float* xout, float* x, f16_t* w, int n, int d, float scale) {
       _mm256_extractf128_ps(sum8, 1)
     );
     __m128 sum1 = _mm_dp_ps(sum4, _mm_set1_ps(1.0f), 0xf1); // sum1[0] = dot(sum4, [1,1,1,1])
-    xout[i] = _mm_cvtss_f32(sum1) * scale;
+    xout[i] = _mm_cvtss_f32(sum1);
   }
 #else
   assert(false && "float16 not supported on this platform");
@@ -122,17 +154,32 @@ static void matmul(float* xout, float* x, f16_t* w, int n, int d, float scale) {
 // matmul supporting float8e5m2 weights via AVX2 and F16C extensions, which (1) 
 // allows vectorized conversion from f8e5m2 to float16 and (2) conversion from 
 // float16 to float32 values before calculations.
-static void matmul(float* xout, float* x, f8e5m2_t* w, int n, int d, float scale) {
+static void matmul(float* xout, float* x, f8e5m2_t* w, int n, int d, const int* block_size, float* scale) {
 #if defined(__AVX2__) && defined(__F16C__)
   // W (d,n) @ x (n,) -> xout (d,)
   assert(n % 16 == 0);
+  assert(scale == nullptr || block_size[1] % 16 == 0);
   int i;
+  static float one = 1.0f;
+  int dummy_block_size[2] = {n, d};
+  if (scale == nullptr) {
+    scale = &one;
+    block_size = dummy_block_size;
+  }
+  int scale_num_rows = (d + block_size[0] - 1) / block_size[0];
+  int scale_num_cols = (n + block_size[1] - 1) / block_size[1];
 #pragma omp parallel for private(i)
   for (i = 0; i < d; i++) {
+    int scale_i = i / block_size[0];
     // Vectorized dot product of w[i][:] and x[:] where w is a packed float8e5m2 array.
     __m256 sumlo = _mm256_setzero_ps();
     __m256 sumhi = _mm256_setzero_ps();
     for (int j = 0; j < n; j+=16) {
+      int scale_j = j / block_size[1];
+      float scale_val = scale[scale_i * scale_num_cols + scale_j];
+      // Broadcast scale_val to all elements of a vector
+      __m256 scale_vec = _mm256_set1_ps(scale_val);
+      
       // Extract the next set of 16 float8e5m2 weights from `w` and store them
       // to two separate float32 vectors of width 8 (`wveclo_ps`, `wvechi_ps`)
       __m128i wvec = _mm_loadu_si128((__m128i*)&w[i * n + j]);
@@ -144,6 +191,11 @@ static void matmul(float* xout, float* x, f8e5m2_t* w, int n, int d, float scale
       // Widen each 8xf16 vector to 8xf32.
       __m256 wveclo_ps = _mm256_cvtph_ps(wveclo);
       __m256 wvechi_ps = _mm256_cvtph_ps(wvechi);
+      
+      // Scale the weight vectors
+      wveclo_ps = _mm256_mul_ps(wveclo_ps, scale_vec);
+      wvechi_ps = _mm256_mul_ps(wvechi_ps, scale_vec);
+      
       // Extract the next two float32 vectors of width 8 `xveclo`, `xvechi` from `x`
       __m256 xveclo = _mm256_loadu_ps(&x[j]);
       __m256 xvechi = _mm256_loadu_ps(&x[j + 8]);
@@ -158,7 +210,7 @@ static void matmul(float* xout, float* x, f8e5m2_t* w, int n, int d, float scale
       _mm256_extractf128_ps(sum8, 1)
     );
     __m128 sum1 = _mm_dp_ps(sum4, _mm_set1_ps(1.0f), 0xf1); // sum1[0] = dot(sum4, [1,1,1,1])
-    xout[i] = _mm_cvtss_f32(sum1) * scale;
+    xout[i] = _mm_cvtss_f32(sum1);
   }
 #else
   assert(false && "float8e5m2 not supported on this platform");
@@ -442,18 +494,18 @@ void Block::_block_cpu(
 
   // qkv matmuls for this position
   if (c.q_lora_rank > 0) {
-    matmul(s.q_a(), s.xb(), wq_a<T>(), c.dim, c.q_lora_rank, _sq_a ? _sq_a[0] : 1.0f);
+    matmul(s.q_a(), s.xb(), wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a);
     switch (c.norm_type) {
       case LayerNormType::RMSNorm: {
         rmsnorm(s.q_a(), s.q_a(), rms_q_a_weight(), c.q_lora_rank, c.norm_eps);
         break;
       }
     }
-    matmul(s.q(), s.q_a(), wq_b<T>(), c.q_lora_rank, q_dim, _sq_b ? _sq_b[0] : 1.0f);
+    matmul(s.q(), s.q_a(), wq_b<T>(), c.q_lora_rank, q_dim, c.block_size.data(), _sq_b);
   } else {
-    matmul(s.q(), s.xb(), wq<T>(), c.dim, q_dim, _sq ? _sq[0] : 1.0f);
+    matmul(s.q(), s.xb(), wq<T>(), c.dim, q_dim, c.block_size.data(), _sq);
   }
-  matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, _skv_a ? _skv_a[0] : 1.0f);
+  matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a);
 
   // Apply RoPE positional encoding to the PE chunks of q and kv_a
   int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
@@ -468,7 +520,7 @@ void Block::_block_cpu(
   // un-compress the latent kv via multiplication with wkv_b
   int qk_nope_head_dim = c.head_dim - c.qk_rope_head_dim;
   int uncompressed_kv_dim = c.n_kv_heads * (qk_nope_head_dim + c.v_head_dim);
-  matmul(s.kv_b(), s.kv_a(), wkv_b<T>(), c.kv_lora_rank, uncompressed_kv_dim, _skv_b ? _skv_b[0] : 1.0f);
+  matmul(s.kv_b(), s.kv_a(), wkv_b<T>(), c.kv_lora_rank, uncompressed_kv_dim, c.block_size.data(), _skv_b);
   // concatenate kv_b and k_rope in each head to build key heads
   for (int h = 0; h < c.n_heads; h++) {
     for (int i = 0; i < qk_nope_head_dim; i++) {
@@ -524,7 +576,7 @@ void Block::_block_cpu(
   }
 
   // final matmul to get output of the attention, using `hb` as temp storage
-  matmul(s.hb(), s.xb2(), wo<T>(), c.n_kv_heads * c.v_head_dim, c.dim, _so ? _so[0] : 1.0f);
+  matmul(s.hb(), s.xb2(), wo<T>(), c.n_kv_heads * c.v_head_dim, c.dim, c.block_size.data(), _so);
 
   // residual connection back into x
   for (int i = 0; i < c.dim; ++i) {
@@ -541,7 +593,7 @@ void Block::_block_cpu(
 
   if (c.n_routed_experts > 0 && moegate() != nullptr) {
     // Block is a sparse MoE FFN layer
-    matmul(s.moe_weights(), s.xb(), moegate(), c.dim, c.n_routed_experts, _moegate_scale ? _moegate_scale[0] : 1.0f);
+    matmul(s.moe_weights(), s.xb(), moegate(), c.dim, c.n_routed_experts, c.block_size.data(), _moegate_scale);
     if (_moegate_bias) {
       for (int i = 0; i < c.n_routed_experts; ++i) {
         s.moe_weights()[i] += _moegate_bias[i];
@@ -557,8 +609,8 @@ void Block::_block_cpu(
       int expert_size = c.dim * c.moe_intermediate_size;
       // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
       // Note this is a feedforward with a GLU, not a simple MLP.
-      matmul(s.hb(), s.xb(), w1<T>() + expert_index * expert_size, c.dim, c.moe_intermediate_size, _s1 ? _s1[expert_index] : 1.0f);
-      matmul(s.hb2(), s.xb(), w3<T>() + expert_index * expert_size, c.dim, c.moe_intermediate_size, _s3 ? _s3[expert_index] : 1.0f);
+      matmul(s.hb(), s.xb(), w1<T>() + expert_index * expert_size, c.dim, c.moe_intermediate_size, c.block_size.data(), _s1);
+      matmul(s.hb2(), s.xb(), w3<T>() + expert_index * expert_size, c.dim, c.moe_intermediate_size, c.block_size.data(), _s3);
       switch (c.act) {
         case ActivationType::GELU: {
           for (int i = 0; i < c.moe_intermediate_size; ++i) {
@@ -573,9 +625,8 @@ void Block::_block_cpu(
           break;
         }
       }
-      matmul(s.xb2(), s.hb(), w2<T>() + expert_index * expert_size, c.moe_intermediate_size, c.dim, _s2 ? _s2[expert_index] : 1.0f);
+      matmul(s.xb2(), s.hb(), w2<T>() + expert_index * expert_size, c.moe_intermediate_size, c.dim, c.block_size.data(), _s2);
       float expert_weight = s.active_experts_weights()[k];
-      // residual connection back into x
       for (int i = 0; i < c.dim; ++i) {
         s.x()[i] += s.xb2()[i] * expert_weight;
       }
@@ -583,8 +634,8 @@ void Block::_block_cpu(
     if (c.n_shared_experts > 0) {
       // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
       // Note this is a feedforward with a GLU, not a simple MLP.
-      matmul(s.hb(), s.xb(), shared_w1<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size, _shared_s1 ? _shared_s1[0] : 1.0f);
-      matmul(s.hb2(), s.xb(), shared_w3<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size, _shared_s3 ? _shared_s3[0] : 1.0f);
+      matmul(s.hb(), s.xb(), shared_w1<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size, c.block_size.data(), _shared_s1);
+      matmul(s.hb2(), s.xb(), shared_w3<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size, c.block_size.data(), _shared_s3);
       switch (c.act) {
         case ActivationType::GELU: {
           for (int i = 0; i < c.n_shared_experts * c.moe_intermediate_size; ++i) {
@@ -600,7 +651,7 @@ void Block::_block_cpu(
         }
       }
 
-      matmul(s.xb2(), s.hb(), shared_w2<T>(), c.n_shared_experts * c.moe_intermediate_size, c.dim, _shared_s2 ? _shared_s2[0] : 1.0f);
+      matmul(s.xb2(), s.hb(), shared_w2<T>(), c.n_shared_experts * c.moe_intermediate_size, c.dim, c.block_size.data(), _shared_s2);
       // residual connection back into x
       for (int i = 0; i < c.dim; ++i) {
         s.x()[i] += s.xb2()[i];
@@ -610,8 +661,8 @@ void Block::_block_cpu(
     // Block is a dense FFN layer
     // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
     // Note this is a feedforward with a GLU, not a simple MLP.
-    matmul(s.hb(), s.xb(), w1<T>(), c.dim, c.hidden_dim, _s1 ? _s1[0] : 1.0f);
-    matmul(s.hb2(), s.xb(), w3<T>(), c.dim, c.hidden_dim, _s3 ? _s3[0] : 1.0f);
+    matmul(s.hb(), s.xb(), w1<T>(), c.dim, c.hidden_dim, c.block_size.data(), _s1);
+    matmul(s.hb2(), s.xb(), w3<T>(), c.dim, c.hidden_dim, c.block_size.data(), _s3);
     switch (c.act) {
       case ActivationType::GELU: {
         for (int i = 0; i < c.hidden_dim; ++i) {
@@ -626,7 +677,7 @@ void Block::_block_cpu(
         break;
       }
     }
-    matmul(s.xb2(), s.hb(), w2<T>(), c.hidden_dim, c.dim, _s2 ? _s2[0] : 1.0f);
+    matmul(s.xb2(), s.hb(), w2<T>(), c.hidden_dim, c.dim, c.block_size.data(), _s2);
     // residual connection back into x
     for (int i = 0; i < c.dim; ++i) {
       s.x()[i] += s.xb2()[i];
@@ -658,14 +709,14 @@ void mha_cpu(
   }
 }
 
-void matmul_cpu(float* xout, float* x, float* w, int n, int d) {
-  matmul(xout, x, w, n, d, 1.0f);
+void matmul_unscaled(float* xout, float* x, float* w, int n, int d) {
+  matmul(xout, x, w, n, d, nullptr, nullptr);
 }
-void matmul_cpu(float* xout, float* x, f16_t* w, int n, int d) {
-  matmul(xout, x, w, n, d, 1.0f);
+void matmul_unscaled(float* xout, float* x, f16_t* w, int n, int d) {
+  matmul(xout, x, w, n, d, nullptr, nullptr);
 }
-void matmul_cpu(float* xout, float* x, f8e5m2_t* w, int n, int d, float scale) {
-  matmul(xout, x, w, n, d, scale);
+void matmul_unscaled(float* xout, float* x, f8e5m2_t* w, int n, int d) {
+  matmul(xout, x, w, n, d, nullptr, nullptr);
 }
 
 void ffn_cpu(
@@ -678,8 +729,8 @@ void ffn_cpu(
   float* hb2 = new float[hidden_dim];
   // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
   // Note this is a feedforward with a GLU, not a simple MLP.
-  matmul(hb, x, w1, dim, hidden_dim, 1.0f);
-  matmul(hb2, x, w3, dim, hidden_dim, 1.0f);
+  matmul_unscaled(hb, x, w1, dim, hidden_dim);
+  matmul_unscaled(hb2, x, w3, dim, hidden_dim);
   switch (act) {
     case ActivationType::GELU: {
       for (int i = 0; i < hidden_dim; ++i) {
@@ -695,7 +746,7 @@ void ffn_cpu(
     }
   }
 
-  matmul(xout, hb, w2, hidden_dim, dim, 1.0f);
+  matmul_unscaled(xout, hb, w2, hidden_dim, dim);
   
   delete[] hb;
   delete[] hb2;
@@ -724,11 +775,15 @@ void Model::_copy_embedding(InferenceState& s, int token) {
     }
     case DType::F8E5M2: {
       f8e5m2_t* emb = static_cast<f8e5m2_t*>(token_embedding_table);
-      float scale = token_embedding_scale[0];
+      int* block_size = config->block_size.data();
+      int scale_num_rows = (c.vocab_size + block_size[0] - 1) / block_size[0];
+      int scale_num_cols = (c.dim + block_size[1] - 1) / block_size[1];
       for (int i = 0; i < c.dim; i+=1) {
+        int scale_i = token / block_size[0];
+        int scale_j = i / block_size[1];
+        float scale = token_embedding_scale[scale_i * scale_num_cols + scale_j];
         s.x()[i] = float8e5m2_to_float(emb[token * c.dim + i]) * scale;
       }
-      break;
     }
     default: {
       assert(false && "unsupported weight dtype");
@@ -770,15 +825,15 @@ void Model::_forward_cpu(InferenceState& s, int token, int pos, InferenceMode mo
   // classifier into logits
   switch (c.weight_dtype) {
     case DType::F32: {
-      matmul(s.logits(), s.x(), static_cast<float*>(wcls), c.dim, c.vocab_size, 1.0f);
+      matmul_unscaled(s.logits(), s.x(), static_cast<float*>(wcls), c.dim, c.vocab_size);
       break;
     }
     case DType::F16: {
-      matmul(s.logits(), s.x(), static_cast<f16_t*>(wcls), c.dim, c.vocab_size, 1.0f);
+      matmul_unscaled(s.logits(), s.x(), static_cast<f16_t*>(wcls), c.dim, c.vocab_size);
       break;
     }
     case DType::F8E5M2: {
-      matmul(s.logits(), s.x(), static_cast<f8e5m2_t*>(wcls), c.dim, c.vocab_size, scls[0]);
+      matmul(s.logits(), s.x(), static_cast<f8e5m2_t*>(wcls), c.dim, c.vocab_size, c.block_size.data(), scls);
       break;
     }
     default: {

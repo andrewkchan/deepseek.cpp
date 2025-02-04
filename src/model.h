@@ -74,6 +74,10 @@ struct Config {
   // Data type of the weights according to config, used
   // to safety check tensor dtype at initialization time.
   DType weight_dtype;
+  // Block size for weight quantization if present
+  // If weights are quantized but block size is (0, 0), then we are using
+  // per-tensor quantization.
+  std::array<int, 2> block_size = {0, 0};
 
   // If nonzero `context` is supplied, max sequence length is limited to `context`.
   void from_yalm(YALMData& yalm, int context = 0);
@@ -256,35 +260,35 @@ private:
 
   // weights for self-attention matmuls
   void* _wq = nullptr; // (n_heads * head_dim, dim)
-  float* _sq = nullptr; // (1,)
+  float* _sq = nullptr;
   void* _wq_a = nullptr; // (q_lora_rank, dim)
-  float* _sq_a = nullptr; // (1,)
+  float* _sq_a = nullptr;
   void* _wq_b = nullptr; // (n_heads * head_dim, q_lora_rank)
-  float* _sq_b = nullptr; // (1,)
+  float* _sq_b = nullptr;
   void* _wkv_a = nullptr; // (kv_lora_rank + qk_rope_head_dim, dim)
-  float* _skv_a = nullptr; // (1,)
+  float* _skv_a = nullptr;
   void* _wkv_b = nullptr; // (n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim), kv_lora_rank)
-  float* _skv_b = nullptr; // (1,)
+  float* _skv_b = nullptr;
   void* _wo = nullptr; // (dim, n_heads * v_head_dim)
-  float* _so = nullptr; // (1,)
+  float* _so = nullptr;
 
   // weights for ffn
   void* _w1 = nullptr; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
-  float* _s1 = nullptr; // (n_routed_experts,) or (1,)
+  float* _s1 = nullptr;
   void* _w2 = nullptr; // (n_routed_experts?, dim, moe_intermediate_size) or (dim, hidden_dim)
-  float* _s2 = nullptr; // (n_routed_experts,) or (1,)
+  float* _s2 = nullptr;
   void* _w3 = nullptr; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
-  float* _s3 = nullptr; // (n_routed_experts,) or (1,)
+  float* _s3 = nullptr;
   void* _shared_w1 = nullptr; // (n_shared_experts?, moe_intermediate_size, dim)
-  float* _shared_s1 = nullptr; // (1,)
+  float* _shared_s1 = nullptr;
   void* _shared_w2 = nullptr; // (n_shared_experts?, dim, moe_intermediate_size)
-  float* _shared_s2 = nullptr; // (1,)
+  float* _shared_s2 = nullptr;
   void* _shared_w3 = nullptr; // (n_shared_experts?, moe_intermediate_size, dim)
-  float* _shared_s3 = nullptr; // (1,)
+  float* _shared_s3 = nullptr;
   // weights for mixture of experts router if present
   float* _moegate = nullptr; // (n_routed_experts?, dim)
-  float* _moegate_scale = nullptr; // (1,)
-  float* _moegate_bias = nullptr; // (n_routed_experts,)
+  float* _moegate_scale = nullptr;
+  float* _moegate_bias = nullptr;
 
   // kv cache
   f16_t* _key_cache = nullptr;   // (seq_len, n_kv_heads * head_dim)
@@ -298,12 +302,12 @@ struct Model {
   
   // token embedding table
   void* token_embedding_table = nullptr; // (vocab_size, dim)
-  float* token_embedding_scale = nullptr; // (1,)
+  float* token_embedding_scale = nullptr; // (ceil(vocab_size / block_size[0]), ceil(dim / block_size[1]))
   // final norm
   float* rms_final_weight = nullptr; // (dim,)
   // classifier weights for the logits, on the last layer
   void* wcls = nullptr; // (vocab_size, dim)
-  float* scls = nullptr; // (1,)
+  float* scls = nullptr;
 
   Model(YALMData& yalm, int context = 0);
   
@@ -362,9 +366,9 @@ void mha_cpu(
   int head_dim, int v_head_dim, int kv_len, int max_seq_len, int n_heads, int n_kv_heads
 );
 
-void matmul_cpu(float* xout, float* x, float* w, int n, int d);
-void matmul_cpu(float* xout, float* x, f16_t* w, int n, int d);
-void matmul_cpu(float* xout, float* x, f8e5m2_t* w, int n, int d);
+void matmul_unscaled(float* xout, float* x, float* w, int n, int d);
+void matmul_unscaled(float* xout, float* x, f16_t* w, int n, int d);
+void matmul_unscaled(float* xout, float* x, f8e5m2_t* w, int n, int d);
 
 void ffn_cpu(
   float* xout, float* x, 
