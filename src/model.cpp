@@ -172,6 +172,10 @@ const Tensor* get_tensor(const YALMData& yalm, const std::string& key) {
   return &tensor;
 };
 
+int cdiv(int a, int b) {
+  return (a + b - 1) / b;
+}
+
 Block::Block(
   int layer_i,
   const std::shared_ptr<Config> config,
@@ -301,60 +305,94 @@ Block::Block(
   }
 
   if (_config->weight_dtype == DType::F8E5M2) {
+    int b0 = config->block_size[0];
+    int b1 = config->block_size[1];
     if (config->q_lora_rank > 0) {
       _sq_a = static_cast<float*>(check_tensor(
-        sq_a, DType::F32, {0, 0, 0, 0}, __LINE__
+        sq_a, DType::F32, 
+        {cdiv(config->dim, b0), cdiv(config->dim, b1), 0, 0}, 
+        __LINE__
       ));
       _sq_b = static_cast<float*>(check_tensor(
-        sq_b, DType::F32, {0, 0, 0, 0}, __LINE__
+        sq_b, DType::F32, 
+        {cdiv(config->n_heads * config->head_dim, b0), cdiv(config->q_lora_rank, b1), 0, 0}, 
+        __LINE__
       ));
     } else {
       _sq = static_cast<float*>(check_tensor(
-        sq, DType::F32, {0, 0, 0, 0}, __LINE__
+        sq, DType::F32, 
+        {cdiv(config->n_heads * config->head_dim, b0), cdiv(config->dim, b1), 0, 0}, 
+        __LINE__
       ));
     }
     _skv_a = static_cast<float*>(check_tensor(
-      skv_a, DType::F32, {0, 0, 0, 0}, __LINE__
+      skv_a, DType::F32, 
+      {cdiv(config->kv_lora_rank + config->qk_rope_head_dim, b0), cdiv(config->dim, b1), 0, 0}, 
+      __LINE__
     ));
     _skv_b = static_cast<float*>(check_tensor(
-      skv_b, DType::F32, {0, 0, 0, 0}, __LINE__
+      skv_b, DType::F32, 
+      {cdiv(config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim), b0), cdiv(config->kv_lora_rank, b1), 0, 0}, 
+      __LINE__
     ));
     _so = static_cast<float*>(check_tensor(
-      so, DType::F32, {0, 0, 0, 0}, __LINE__
+      so, DType::F32, 
+      {cdiv(config->dim, b0), cdiv(config->n_heads * config->v_head_dim, b1), 0, 0}, 
+      __LINE__
     ));
     if (config->n_routed_experts > 0 && layer_i >= config->first_k_dense_replace) {
       _moegate_scale = static_cast<float*>(check_tensor(
-        moegate_scale, DType::F32, {0, 0, 0, 0}, __LINE__
+        moegate_scale, DType::F32, 
+        {cdiv(config->n_routed_experts, b0), cdiv(config->dim, b1), 0, 0}, 
+        __LINE__
       ));
       _s1 = static_cast<float*>(check_tensor(
-        s1, DType::F32, {config->n_routed_experts, 0, 0, 0}, __LINE__
+        s1, DType::F32, 
+        {config->n_routed_experts, cdiv(config->moe_intermediate_size, b0), cdiv(config->dim, b1), 0}, 
+        __LINE__
       ));
       _s2 = static_cast<float*>(check_tensor(
-        s2, DType::F32, {config->n_routed_experts, 0, 0, 0}, __LINE__
+        s2, DType::F32, 
+        {config->n_routed_experts, cdiv(config->dim, b0), cdiv(config->moe_intermediate_size, b1), 0}, 
+        __LINE__
       ));
       _s3 = static_cast<float*>(check_tensor(
-        s3, DType::F32, {config->n_routed_experts, 0, 0, 0}, __LINE__
+        s3, DType::F32, 
+        {config->n_routed_experts, cdiv(config->moe_intermediate_size, b0), cdiv(config->dim, b1), 0}, 
+        __LINE__
       ));
       if (config->n_shared_experts > 0) {
         _shared_s1 = static_cast<float*>(check_tensor(
-          shared_s1, DType::F32, {0, 0, 0, 0}, __LINE__
+          shared_s1, DType::F32, 
+          {cdiv(config->n_shared_experts * config->moe_intermediate_size, b0), cdiv(config->dim, b1), 0}, 
+          __LINE__
         ));
         _shared_s2 = static_cast<float*>(check_tensor(
-          shared_s2, DType::F32, {0, 0, 0, 0}, __LINE__
+          shared_s2, DType::F32, 
+          {cdiv(config->dim, b0), cdiv(config->n_shared_experts * config->moe_intermediate_size, b1), 0}, 
+          __LINE__
         ));
         _shared_s3 = static_cast<float*>(check_tensor(
-          shared_s3, DType::F32, {0, 0, 0, 0}, __LINE__
+          shared_s3, DType::F32, 
+          {cdiv(config->n_shared_experts * config->moe_intermediate_size, b0), cdiv(config->dim, b1), 0}, 
+          __LINE__
         ));
       }
     } else {
       _s1 = static_cast<float*>(check_tensor(
-        s1, DType::F32, {0, 0, 0, 0}, __LINE__
+        s1, DType::F32, 
+        {cdiv(config->hidden_dim, b0), cdiv(config->dim, b1), 0, 0}, 
+        __LINE__
       ));
       _s2 = static_cast<float*>(check_tensor(
-        s2, DType::F32, {0, 0, 0, 0}, __LINE__
+        s2, DType::F32, 
+        {cdiv(config->dim, b0), cdiv(config->hidden_dim, b1), 0, 0}, 
+        __LINE__
       ));
       _s3 = static_cast<float*>(check_tensor(
-        s3, DType::F32, {0, 0, 0, 0}, __LINE__
+        s3, DType::F32, 
+        {cdiv(config->hidden_dim, b0), cdiv(config->dim, b1), 0, 0}, 
+        __LINE__
       ));
     }
   }
@@ -460,6 +498,8 @@ Model::Model(YALMData& yalm, int context) {
   std::cout << "loading model with dtype: " << dtype_to_string(config->weight_dtype) << std::endl;
 
   bool need_weight_scales = config->weight_dtype == DType::F8E5M2;
+  int b0 = config->block_size[0];
+  int b1 = config->block_size[1];
 
   token_embedding_table = check_tensor(
     get_tensor(yalm, "model.embed.weight"), 
@@ -471,7 +511,7 @@ Model::Model(YALMData& yalm, int context) {
     token_embedding_scale = static_cast<float*>(check_tensor(
       get_tensor(yalm, "model.embed.scale"), 
       DType::F32,
-      {0, 0, 0, 0},
+      {cdiv(config->vocab_size, b0), cdiv(config->dim, b1), 0, 0},
       __LINE__
     ));
   }
@@ -535,7 +575,7 @@ Model::Model(YALMData& yalm, int context) {
       scls = static_cast<float*>(check_tensor(
         get_tensor(yalm, "model.output.scale"), 
         DType::F32, 
-        {0, 0, 0, 0},
+        {cdiv(config->vocab_size, b0), cdiv(config->dim, b1), 0, 0},
         __LINE__
       ));
     }
