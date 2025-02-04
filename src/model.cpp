@@ -13,6 +13,10 @@
 
 using json = nlohmann::json;
 
+int cdiv(int a, int b) {
+  return (a + b - 1) / b;
+}
+
 void Config::from_yalm(YALMData& yalm, int context) {
   dim = std::stoi(yalm.metadata.at("dim").get<std::string>());
   hidden_dim = std::stoi(yalm.metadata.at("hidden_dim").get<std::string>());
@@ -171,10 +175,6 @@ const Tensor* get_tensor(const YALMData& yalm, const std::string& key) {
   const Tensor& tensor = it->second;
   return &tensor;
 };
-
-int cdiv(int a, int b) {
-  return (a + b - 1) / b;
-}
 
 Block::Block(
   int layer_i,

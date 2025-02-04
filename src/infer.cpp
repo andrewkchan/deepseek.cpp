@@ -63,13 +63,56 @@ template <typename T>
 static void save_debug_tensor(const std::string& name, T* x, size_t size) {
   _debug_map[name] = DebugTensor(copy_debug_tensor<T>(x, size));
 }
+static void dump_debug_map(const std::string& filename) {
+  std::ofstream out(filename);
+  if (!out.is_open()) {
+    fprintf(stderr, "Failed to open %s for writing\n", filename.c_str());
+    return;
+  }
+
+  // Write Python imports
+  out << "import torch\n\n";
+  out << "debug_tensors = {\n";
+
+  // Iterate through debug map and write each tensor
+  bool first = true;
+  for (const auto& pair : _debug_map) {
+    if (!first) {
+      out << ",\n";
+    }
+    first = false;
+
+    const std::string& name = pair.first;
+    const DebugTensor& tensor = pair.second;
+
+    out << "    '" << name << "': torch.tensor([";
+
+    // Write tensor values
+    bool first_val = true;
+    assert(tensor.data_type == DebugTensor::DataType::F32);
+    for (const auto& val : tensor.data_f32) {
+      if (!first_val) {
+        out << ", ";
+      }
+      first_val = false;
+      
+      // Use scientific notation with high precision
+      out << std::scientific << std::setprecision(8) << val;
+    }
+    
+    out << "])";
+  }
+  
+  out << "\n}\n";
+  out.close();
+}
 #endif
 
 static void matmul(float* xout, float* x, float* w, int n, int d, const int* block_size, float* scale) {
   // W (d,n) @ x (n,) -> xout (d,)
   int i;
   static float one = 1.0f;
-  int dummy_block_size[2] = {n, d};
+  int dummy_block_size[2] = {d, n};
   if (scale == nullptr) {
     scale = &one;
     block_size = dummy_block_size;
@@ -97,7 +140,7 @@ static void matmul(float* xout, float* x, f16_t* w, int n, int d, const int* blo
   assert(scale == nullptr || block_size[1] % 16 == 0);
   int i;
   static float one = 1.0f;
-  int dummy_block_size[2] = {n, d};
+  int dummy_block_size[2] = {d, n};
   if (scale == nullptr) {
     scale = &one;
     block_size = dummy_block_size;
@@ -159,7 +202,7 @@ static void matmul(float* xout, float* x, f8e5m2_t* w, int n, int d, const int* 
   assert(scale == nullptr || block_size[1] % 16 == 0);
   int i;
   static float one = 1.0f;
-  int dummy_block_size[2] = {n, d};
+  int dummy_block_size[2] = {d, n};
   if (scale == nullptr) {
     scale = &one;
     block_size = dummy_block_size;
@@ -604,10 +647,15 @@ void Block::_block_cpu(
     for (int k = 0; k < c.n_active_routed; ++k) {
       int expert_index = s.active_experts()[k];
       int expert_size = c.dim * c.moe_intermediate_size;
+      int expert_scale13_size = cdiv(c.moe_intermediate_size, c.block_size[0]) * cdiv(c.dim, c.block_size[1]);
+      int expert_scale2_size = cdiv(c.dim, c.block_size[0]) * cdiv(c.moe_intermediate_size, c.block_size[1]);
+      int weight_offset = expert_index * expert_size;
+      int scale13_offset = expert_index * expert_scale13_size;
+      int scale2_offset = expert_index * expert_scale2_size;
       // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
       // Note this is a feedforward with a GLU, not a simple MLP.
-      matmul(s.hb(), s.xb(), w1<T>() + expert_index * expert_size, c.dim, c.moe_intermediate_size, c.block_size.data(), _s1);
-      matmul(s.hb2(), s.xb(), w3<T>() + expert_index * expert_size, c.dim, c.moe_intermediate_size, c.block_size.data(), _s3);
+      matmul(s.hb(), s.xb(), w1<T>() + weight_offset, c.dim, c.moe_intermediate_size, c.block_size.data(), _s1 + scale13_offset);
+      matmul(s.hb2(), s.xb(), w3<T>() + weight_offset, c.dim, c.moe_intermediate_size, c.block_size.data(), _s3 + scale13_offset);
       switch (c.act) {
         case ActivationType::GELU: {
           for (int i = 0; i < c.moe_intermediate_size; ++i) {
@@ -622,7 +670,7 @@ void Block::_block_cpu(
           break;
         }
       }
-      matmul(s.xb2(), s.hb(), w2<T>() + expert_index * expert_size, c.moe_intermediate_size, c.dim, c.block_size.data(), _s2);
+      matmul(s.xb2(), s.hb(), w2<T>() + weight_offset, c.moe_intermediate_size, c.dim, c.block_size.data(), _s2 + scale2_offset);
       float expert_weight = s.active_experts_weights()[k];
       for (int i = 0; i < c.dim; ++i) {
         s.x()[i] += s.xb2()[i] * expert_weight;

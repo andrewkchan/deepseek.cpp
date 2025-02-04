@@ -39,6 +39,8 @@ enum class InferenceMode {
   OUTPUT_LOGITS // set InferenceState logits to logits for the next token
 };
 
+int cdiv(int a, int b);
+
 struct Config {
   int dim;                  // transformer input & output dimension
   int hidden_dim;           // dimension of hidden layer in feedforward network (dense blocks only)
