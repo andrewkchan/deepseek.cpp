@@ -102,9 +102,9 @@ void Config::from_yalm(YALMData& yalm, int context) {
   }
 
   // quantization
-  if (yalm.metadata.at("quantization_block_size").get<std::string>() != "null") {
-    block_size[0] = std::stoi(yalm.metadata.at("quantization_block_size").at(0).get<std::string>());
-    block_size[1] = std::stoi(yalm.metadata.at("quantization_block_size").at(1).get<std::string>());
+  if (yalm.metadata.contains("quantization_block_size_0")) {
+    block_size[0] = std::stoi(yalm.metadata.at("quantization_block_size_0").get<std::string>());
+    block_size[1] = std::stoi(yalm.metadata.at("quantization_block_size_1").get<std::string>());
   }
 }
 

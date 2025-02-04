@@ -105,7 +105,9 @@ class Metadata:
       result["act_type"] = str(self.act_type)
       result["first_k_dense_replace"] = str(self.first_k_dense_replace)
       # quantization
-      result["quantization_block_size"] = str(self.quantization_block_size)
+      if self.quantization_block_size is not None:
+        result["quantization_block_size_0"] = str(self.quantization_block_size[0])
+        result["quantization_block_size_1"] = str(self.quantization_block_size[1])
       # multi-latent attention
       result["kv_lora_rank"] = str(self.kv_lora_rank)
       result["q_lora_rank"] = str(self.q_lora_rank)
