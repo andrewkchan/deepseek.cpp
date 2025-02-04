@@ -784,6 +784,7 @@ void Model::_copy_embedding(InferenceState& s, int token) {
         float scale = token_embedding_scale[scale_i * scale_num_cols + scale_j];
         s.x()[i] = float8e5m2_to_float(emb[token * c.dim + i]) * scale;
       }
+      break;
     }
     default: {
       assert(false && "unsupported weight dtype");
