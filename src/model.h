@@ -186,7 +186,6 @@ struct Block {
     const Tensor* shared_w3,
     const Tensor* shared_s3,
     const Tensor* moegate,
-    const Tensor* moegate_scale,
     const Tensor* moegate_bias
   );
   ~Block();
@@ -287,7 +286,6 @@ private:
   float* _shared_s3 = nullptr;
   // weights for mixture of experts router if present
   float* _moegate = nullptr; // (n_routed_experts?, dim)
-  float* _moegate_scale = nullptr;
   float* _moegate_bias = nullptr;
 
   // kv cache

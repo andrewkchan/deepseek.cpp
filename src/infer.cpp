@@ -590,7 +590,7 @@ void Block::_block_cpu(
 
   if (c.n_routed_experts > 0 && moegate() != nullptr) {
     // Block is a sparse MoE FFN layer
-    matmul(s.moe_weights(), s.xb(), moegate(), c.dim, c.n_routed_experts, c.block_size.data(), _moegate_scale);
+    matmul_unscaled(s.moe_weights(), s.xb(), moegate(), c.dim, c.n_routed_experts);
     if (_moegate_bias) {
       for (int i = 0; i < c.n_routed_experts; ++i) {
         s.moe_weights()[i] += _moegate_bias[i];
