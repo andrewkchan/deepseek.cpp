@@ -46,6 +46,16 @@ class Metadata:
       self.rope_theta = config.get("rope_theta", 10000.0)
       self.norm_eps = config["rms_norm_eps"]
       self.norm_type = "rmsnorm"
+      
+      # quantization
+      self.original_quantization_config = config.get("quantization_config", None)
+      if self.original_quantization_config is not None:
+        dequant_block_sizes = self.original_quantization_config["weight_block_size"]
+        assert type(dequant_block_sizes) == list and len(dequant_block_sizes) == 2
+        assert self.original_quantization_config["quant_method"] == "fp8"
+      self.quantization_block_size = None
+      if self.dtype == "f8e5m2":
+        self.quantization_block_size = [128, 128]
 
       assert config.get("attention_bias", False) == False
       assert config.get("mlp_bias", False) == False
@@ -59,11 +69,6 @@ class Metadata:
       self.q_lora_rank = config["q_lora_rank"] or 0
       self.qk_nope_head_dim = config["qk_nope_head_dim"]
       self.qk_rope_head_dim = config["qk_rope_head_dim"]
-      self.original_quantization_config = config.get("quantization_config", None)
-      if self.original_quantization_config is not None:
-        block_sizes = self.original_quantization_config["weight_block_size"]
-        assert type(block_sizes) == list and len(block_sizes) == 2
-        assert self.original_quantization_config["quant_method"] == "fp8"
       self.v_head_dim = config["v_head_dim"]
 
       # mixture of experts
@@ -99,6 +104,8 @@ class Metadata:
       result["norm_type"] = str(self.norm_type)
       result["act_type"] = str(self.act_type)
       result["first_k_dense_replace"] = str(self.first_k_dense_replace)
+      # quantization
+      result["quantization_block_size"] = str(self.quantization_block_size)
       # multi-latent attention
       result["kv_lora_rank"] = str(self.kv_lora_rank)
       result["q_lora_rank"] = str(self.q_lora_rank)
@@ -208,14 +215,31 @@ def blockwise_dequantize(qweight: torch.Tensor, scale: torch.Tensor, block_size:
       out[i*block_size_i:(i+1)*block_size_i, j*block_size_j:(j+1)*block_size_j] = per_tensor_dequantize(qw_block, scale[i, j])
   return out
 
-def per_expert_quantize(expert_weights: torch.Tensor, dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
+def blockwise_quantize(weight: torch.Tensor, block_size: torch.Tensor, dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
+  assert weight.ndim == block_size.numel() and weight.ndim == 2
+  scale_shape = torch.Size((torch.tensor(list(weight.shape)) / block_size).ceil().long())
+  scale = torch.empty(scale_shape, dtype=torch.float32)
+  out = torch.empty_like(weight, dtype=dtype)
+  for i in range(scale.shape[0]):
+    for j in range(scale.shape[1]):
+      block_size_i = block_size[0]
+      block_size_j = block_size[1]
+      w_block = weight[i*block_size_i:(i+1)*block_size_i, j*block_size_j:(j+1)*block_size_j]
+      qw_block, scale_block = per_tensor_quantize(w_block, dtype)
+      out[i*block_size_i:(i+1)*block_size_i, j*block_size_j:(j+1)*block_size_j] = qw_block
+      scale[i, j] = scale_block
+  return out, scale
+
+def per_expert_quantize(expert_weights: torch.Tensor, block_size: torch.Tensor, dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
   assert expert_weights.ndim == 3
   num_experts = expert_weights.shape[0]
-  output_weights = torch.zeros_like(expert_weights, dtype=dtype)
-  scales = torch.zeros(num_experts, dtype=torch.float32)
+  output_weights = []
+  scales = []
   for e in range(num_experts):
-    output_weights[e], scales[e] = per_tensor_quantize(expert_weights[e], dtype)
-  return output_weights, scales
+    weight, scale = blockwise_quantize(expert_weights[e], block_size, dtype)
+    output_weights.append(weight)
+    scales.append(scale)
+  return torch.stack(output_weights), torch.stack(scales)
 
 def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers):
   """
@@ -235,21 +259,27 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers
 
   # convert weights
   progress = 0
-  block_size = None
+  dequant_block_size = None
   if metadata.original_quantization_config is not None:
-    block_size = torch.tensor(metadata.original_quantization_config["weight_block_size"])
+    dequant_block_size = torch.tensor(metadata.original_quantization_config["weight_block_size"])
   tensors = {}
+
   def conv(weight_name: str, scale_name: str):
     nonlocal progress
     progress += 1
     t = weights[weight_name]
     if scale_name in weights:
       scale = weights[scale_name]
-      t = blockwise_dequantize(t, scale, block_size)
+      t = blockwise_dequantize(t, scale, dequant_block_size)
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     if dtype not in [torch.float32, torch.float16]:
-      return per_tensor_quantize(t, dtype)
+      quant_block_size = torch.tensor(metadata.quantization_block_size)
+      if quant_block_size[0] == 0 and quant_block_size[1] == 0:
+        return per_tensor_quantize(t, dtype)
+      else:
+        return blockwise_quantize(t, quant_block_size, dtype)
     return t.to(dtype), None
+  
   def conv_experts(weight_and_scale_names: List[Tuple[str, str]]):
     nonlocal progress
     progress += 1
@@ -257,12 +287,17 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers
     if weight_and_scale_names[0][1] in weights:
       for i in range(len(weight_and_scale_names)):
         scale = weights[weight_and_scale_names[i][1]]
-        expert_weights[i] = blockwise_dequantize(expert_weights[i], scale, block_size)
+        expert_weights[i] = blockwise_dequantize(expert_weights[i], scale, dequant_block_size)
     t = torch.stack(expert_weights)
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     if dtype not in [torch.float32, torch.float16]:
-      return per_expert_quantize(t, dtype)
+      quant_block_size = torch.tensor(metadata.quantization_block_size)
+      if quant_block_size[0] == 0 and quant_block_size[1] == 0:
+        return per_tensor_quantize(t, dtype)
+      else:
+        return per_expert_quantize(t, quant_block_size, dtype)
     return t.to(dtype), None
+  
   def save_weight_and_scale(weight_name: str, scale_name: str, weight_and_scale: Tuple[torch.Tensor, torch.Tensor]):
     tensors[weight_name] = weight_and_scale[0]
     if weight_and_scale[1] is not None:
