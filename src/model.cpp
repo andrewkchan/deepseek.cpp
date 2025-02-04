@@ -100,6 +100,12 @@ void Config::from_yalm(YALMData& yalm, int context) {
     std::cerr << "FATAL: unsupported dtype: " << dtype << std::endl;
     assert(false);
   }
+
+  // quantization
+  if (yalm.metadata.at("quantization_block_size").get<std::string>() != "null") {
+    block_size[0] = std::stoi(yalm.metadata.at("quantization_block_size").at(0).get<std::string>());
+    block_size[1] = std::stoi(yalm.metadata.at("quantization_block_size").at(1).get<std::string>());
+  }
 }
 
 size_t Config::active_bytes(size_t pos) const {
