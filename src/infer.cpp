@@ -74,7 +74,6 @@ static void matmul(float* xout, float* x, float* w, int n, int d, const int* blo
     scale = &one;
     block_size = dummy_block_size;
   }
-  int scale_num_rows = (d + block_size[0] - 1) / block_size[0];
   int scale_num_cols = (n + block_size[1] - 1) / block_size[1];
 #pragma omp parallel for private(i)
   for (i = 0; i < d; i++) {
@@ -103,7 +102,6 @@ static void matmul(float* xout, float* x, f16_t* w, int n, int d, const int* blo
     scale = &one;
     block_size = dummy_block_size;
   }
-  int scale_num_rows = (d + block_size[0] - 1) / block_size[0];
   int scale_num_cols = (n + block_size[1] - 1) / block_size[1];
 #pragma omp parallel for private(i)
   for (i = 0; i < d; i++) {
@@ -166,7 +164,6 @@ static void matmul(float* xout, float* x, f8e5m2_t* w, int n, int d, const int* 
     scale = &one;
     block_size = dummy_block_size;
   }
-  int scale_num_rows = (d + block_size[0] - 1) / block_size[0];
   int scale_num_cols = (n + block_size[1] - 1) / block_size[1];
 #pragma omp parallel for private(i)
   for (i = 0; i < d; i++) {
@@ -776,7 +773,6 @@ void Model::_copy_embedding(InferenceState& s, int token) {
     case DType::F8E5M2: {
       f8e5m2_t* emb = static_cast<f8e5m2_t*>(token_embedding_table);
       int* block_size = config->block_size.data();
-      int scale_num_rows = (c.vocab_size + block_size[0] - 1) / block_size[0];
       int scale_num_cols = (c.dim + block_size[1] - 1) / block_size[1];
       for (int i = 0; i < c.dim; i+=1) {
         int scale_i = token / block_size[0];
