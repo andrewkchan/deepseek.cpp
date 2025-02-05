@@ -309,7 +309,7 @@ Block::Block(
     if (config->q_lora_rank > 0) {
       _sq_a = static_cast<float*>(check_tensor(
         sq_a, DType::F32, 
-        {cdiv(config->dim, b0), cdiv(config->dim, b1), 0, 0}, 
+        {cdiv(config->q_lora_rank, b0), cdiv(config->dim, b1), 0, 0}, 
         __LINE__
       ));
       _sq_b = static_cast<float*>(check_tensor(
