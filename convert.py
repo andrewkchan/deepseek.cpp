@@ -454,7 +454,7 @@ if __name__ == "__main__":
   tokens = load_tokens(args.tokenizer, metadata.vocab_size)
   
   # Process and save weight shards
-  for shard_idx, shard in enumerate(load_weights(args.models, args.dtype, metadata, config.get("tie_word_embeddings", None), args.n_layers), 1):
+  for shard_idx, shard in enumerate(load_weights(args.models, args.dtype, metadata, config.get("tie_word_embeddings", None), args.n_layers)):
     if shard_idx == 0:
       shard["tokenizer.tokens"] = torch.cat([torch.tensor([x for x in b] + [0], dtype=torch.uint8) for b in tokens])
       save_file(shard, os.path.join(args.output_dir, f"shard_{shard_idx:03d}.dseek"), metadata.to_dict())
