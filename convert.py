@@ -265,6 +265,7 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers
   if metadata.original_quantization_config is not None:
     dequant_block_size = torch.tensor(metadata.original_quantization_config["weight_block_size"])
   tensors = {}
+  output_shards = []
 
   def conv(weight_name: str, scale_name: str):
     nonlocal progress
@@ -311,6 +312,9 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers
   )
 
   for l in range(config["num_hidden_layers"]):
+    if l % 8 == 0:
+      output_shards.append(tensors)
+      tensors = {}
     if n_layers is not None and l >= n_layers:
       break
 
@@ -408,17 +412,23 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers
   else:
     # Model output classifier just uses the word embeddings matrix
     pass
+
+  output_shards.append(tensors)
   
   print() # newline
-  return tensors
+  return output_shards
 
 if __name__ == "__main__":
   argp = argparse.ArgumentParser()
-  argp.add_argument("output", type=str)
+  argp.add_argument("output_dir", type=str)
   argp.add_argument("input", type=str, nargs="?")
   argp.add_argument("--dtype", type=str, default="fp16", choices=SUPPORTED_DTYPES)
   argp.add_argument("--n-layers", type=int, default=None, help="number of layers to convert (if None, convert all)")
   args = argp.parse_args()
+
+  if os.path.exists(args.output_dir) and not os.path.isdir(args.output_dir):
+    argp.error(f"output directory {args.output_dir} already exists and is not a directory")
+  os.makedirs(args.output_dir, exist_ok=True)
 
   if args.input is not None:
     # Input is a directory with HuggingFace layout, e.g. files:
@@ -445,11 +455,12 @@ if __name__ == "__main__":
     metadata = Metadata(config, args.dtype, args.n_layers)
 
   tokens = load_tokens(args.tokenizer, metadata.vocab_size)
-  tensors = load_weights(args.models, args.dtype, metadata, config.get("tie_word_embeddings", None), args.n_layers)
+  tensor_shards = load_weights(args.models, args.dtype, metadata, config.get("tie_word_embeddings", None), args.n_layers)
 
   # add tokenizer tensors at the end (to maximize the chance of model tensor alignment)
   # note: we concatenate all bytes of all tokens into a single tensor
-  tensors["tokenizer.tokens"] = torch.cat([torch.tensor([x for x in b] + [0], dtype=torch.uint8) for b in tokens])
+  tensor_shards[0]["tokenizer.tokens"] = torch.cat([torch.tensor([x for x in b] + [0], dtype=torch.uint8) for b in tokens])
 
-  print(f"Saving {len(tensors)} tensors...")
-  save_file(tensors, args.output, metadata.to_dict())
+  print(f"Saving {sum([len(shard) for shard in tensor_shards])} tensors...")
+  for shard_idx, shard in enumerate(tensor_shards):
+    save_file(shard, os.path.join(args.output_dir, f"shard_{shard_idx:03d}_of_{len(tensor_shards):03d}.dseek"), metadata.to_dict())
