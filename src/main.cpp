@@ -15,8 +15,8 @@
 #include "tokenizer.h"
 
 void error_usage() {
-  fprintf(stderr, "Usage:   main <checkpoint> [options]\n");
-  fprintf(stderr, "Example: main model.dseek -i \"Q: What is the meaning of life?\"\n");
+  fprintf(stderr, "Usage:   main <checkpoint_dir> [options]\n");
+  fprintf(stderr, "Example: main model_weights_dir/ -i \"Q: What is the meaning of life?\"\n");
   fprintf(stderr, "Options:\n");
   fprintf(stderr, "  -h Display this help message\n");
   fprintf(stderr, "  -m [completion,passkey,perplexity] which mode to run in (default - completion)\n");
@@ -39,14 +39,14 @@ void error_usage() {
 }
 
 void run_completion(
-  const std::string& checkpoint_path,
+  const std::string& checkpoint_dir,
   const std::string& prompt,
   const int context,
   int num_steps,
   float temperature
 ) {
   YALMData model_data;
-  model_data.from_file(checkpoint_path);
+  model_data.from_directory(checkpoint_dir);
   Model model(model_data, context);
   InferenceState state(model.config);
   Sampler sampler(model.config, get_timestamp_ms());
@@ -127,12 +127,12 @@ void run_completion(
 }
 
 void run_perplexity(
-  const std::string& checkpoint_path,
+  const std::string& checkpoint_dir,
   const std::string& prompt,
   const int context
 ) {
   YALMData model_data;
-  model_data.from_file(checkpoint_path);
+  model_data.from_directory(checkpoint_dir);
   Model model(model_data, context);
   InferenceState state(model.config);
   Sampler sampler(model.config, get_timestamp_ms());
@@ -205,13 +205,13 @@ void run_perplexity(
 }
 
 void run_passkey(
-  const std::string& checkpoint_path,
+  const std::string& checkpoint_dir,
   const int context,
   const int n_junk,
   const int passkey_pos
 ) {
   YALMData model_data;
-  model_data.from_file(checkpoint_path);
+  model_data.from_directory(checkpoint_dir);
   Model model(model_data, context);
   InferenceState state(model.config);
   Sampler sampler(model.config, get_timestamp_ms());
@@ -289,7 +289,7 @@ void run_passkey(
 }
 
 int main(int argc, char* argv[]) {
-  std::string checkpoint_path = "";    // e.g. out/model.bin
+  std::string checkpoint_dir = "";    // e.g. out/model.bin
   // Options
   std::string mode = "completion";     // completion, passkey, or perplexity
   std::string prompt = "";             // prompt string
@@ -303,7 +303,7 @@ int main(int argc, char* argv[]) {
   int passkey_pos = -1;                 // passkey position (-1 - random)
 
   if (argc >= 2) {
-    checkpoint_path = argv[1];
+    checkpoint_dir = argv[1];
   } else {
     error_usage();
   }
@@ -402,11 +402,11 @@ int main(int argc, char* argv[]) {
   }
 
   if (mode == "completion") {
-    run_completion(checkpoint_path, prompt, context, num_steps, temperature);
+    run_completion(checkpoint_dir, prompt, context, num_steps, temperature);
   } else if (mode == "passkey") {
-    run_passkey(checkpoint_path, context, n_junk, passkey_pos);
+    run_passkey(checkpoint_dir, context, n_junk, passkey_pos);
   } else if (mode == "perplexity") {
-    run_perplexity(checkpoint_path, prompt, context);
+    run_perplexity(checkpoint_dir, prompt, context);
   }
 
   return 0;

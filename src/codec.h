@@ -6,6 +6,9 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <dirent.h>
+#include <algorithm>
+#include <vector>
 
 using json = nlohmann::json;
 
@@ -39,14 +42,16 @@ struct Tensor {
 };
 
 struct YALMData {
-  void* data = nullptr;
-  size_t size;
-
   json metadata;
-
   std::unordered_map<std::string, Tensor> tensors;
 
-  // Initialize a YALMData object from a .yalm file which was created by `convert.py`.
+  // Update YALMData with tensors from a file
+  // If read_metadata is true, also update metadata from this file
   // Returns 0 if successful, other if failed
-  int from_file(const std::string& filename);
+  int update_from_file(const std::string& filename, bool read_metadata = false);
+
+  // Initialize YALMData from all files in a directory
+  // Metadata is read from the first file (in sorted order)
+  // Returns 0 if successful, other if failed
+  int from_directory(const std::string& dirname);
 };
