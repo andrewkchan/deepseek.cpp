@@ -281,11 +281,12 @@ inline float sigmoid(float x) {
 }
 
 static void moe_gate(
-  float* moe_weights, 
-  int* active_experts, 
-  float* x, 
-  int n_routed_experts, 
-  int n_active_routed, 
+  float* moe_weights,
+  float* moegate_bias,
+  int* active_experts,
+  float* x,
+  int n_routed_experts,
+  int n_active_routed,
   bool norm_topk_prob,
   float routed_scaling_factor,
   ScoringFunc scoring_func,
@@ -302,7 +303,13 @@ static void moe_gate(
       x[i] = sigmoid(x[i]);
     }
   }
-  
+
+  if (moegate_bias) {
+    for (int i = 0; i < n_routed_experts; ++i) {
+      x[i] += moegate_bias[i];
+    }
+  }
+
   // top k
   float wsum = 0.0f;
   if (topk_method == TopKMethod::GREEDY) {
@@ -683,13 +690,8 @@ void Block::_block_cpu(
   if (c.n_routed_experts > 0 && moegate() != nullptr) {
     // Block is a sparse MoE FFN layer
     matmul_unscaled(s.moe_weights(), s.xb(), moegate(), c.dim, c.n_routed_experts);
-    if (_moegate_bias) {
-      for (int i = 0; i < c.n_routed_experts; ++i) {
-        s.moe_weights()[i] += _moegate_bias[i];
-      }
-    }
     moe_gate(
-      s.active_experts_weights(), s.active_experts(), s.moe_weights(), 
+      s.active_experts_weights(), _moegate_bias, s.active_experts(), s.moe_weights(),
       c.n_routed_experts, c.n_active_routed, c.norm_topk_prob, c.routed_scaling_factor,
       c.scoring_func, c.topk_method, c.n_group, c.topk_group
     );
