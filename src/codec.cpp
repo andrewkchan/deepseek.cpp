@@ -94,7 +94,7 @@ int Tensor::from_json(const std::string& name, const json& val, void* bytes_ptr,
   return 0;
 }
 
-int YALMData::from_file(const std::string& filename) {
+int YALMData::update_from_file(const std::string& filename, bool read_metadata) {
   std::cout << "loading data from file: " << filename << std::endl;
   int fd = open(filename.c_str(), O_RDONLY);
   if (fd == -1) {
@@ -107,8 +107,8 @@ int YALMData::from_file(const std::string& filename) {
     return -1;
   }
   
-  size = st.st_size;
-  data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+  size_t size = st.st_size;
+  void* data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
   if (data == MAP_FAILED) {
     close(fd);
     return -1;
@@ -119,7 +119,7 @@ int YALMData::from_file(const std::string& filename) {
   posix_fadvise(fd, 0, size, POSIX_FADV_SEQUENTIAL);
 #endif
 
-  close(fd); // fd can be closed after mmap returns without invalidating the mapping
+  close(fd);
 
   // Parse the metadata JSON and the tensors
   if (size < sizeof(uint64_t)) {
@@ -141,14 +141,54 @@ int YALMData::from_file(const std::string& filename) {
   json header = json::parse(json_str);
 
   for (auto& [key, val] : header.items()) {
-    if (key == "__metadata__") {
+    if (key == "__metadata__" && read_metadata) {
       metadata = val;
-    } else {
+    } else if (key != "__metadata__") {
       Tensor& tensor = tensors[key];
       if (tensor.from_json(key, val, bytes_ptr, bytes_size) != 0) {
         munmap(data, size);
         return -1;
       }
+    }
+  }
+
+  return 0;
+}
+
+int YALMData::from_directory(const std::string& dirname) {
+  std::vector<std::string> files;
+  DIR* dir = opendir(dirname.c_str());
+  if (dir == nullptr) {
+    return -1;
+  }
+
+  // Collect all files
+  struct dirent* entry;
+  while ((entry = readdir(dir)) != nullptr) {
+    std::string filename = entry->d_name;
+    // Skip . and .. directory entries
+    if (filename != "." && filename != "..") {
+      files.push_back(dirname + "/" + filename);
+    }
+  }
+  closedir(dir);
+
+  if (files.empty()) {
+    return -1;
+  }
+
+  // Sort files to ensure consistent ordering
+  std::sort(files.begin(), files.end());
+
+  // Read first file with metadata
+  if (update_from_file(files[0], true) != 0) {
+    return -1;
+  }
+
+  // Read remaining files without metadata
+  for (size_t i = 1; i < files.size(); i++) {
+    if (update_from_file(files[i], false) != 0) {
+      return -1;
     }
   }
 
