@@ -245,9 +245,9 @@ def per_expert_quantize(expert_weights: torch.Tensor, block_size: torch.Tensor, 
 
 def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers):
   """
-  Load all weights from the model files in huggingface format into a dictionary of tensors,
-  normalizing the attention weights, and casting all tensors (except for all layer norm weights,
-  which are converted to float32) to the specified dtype.
+  Generator that yields shards of weights loaded from the model files in huggingface format.
+  Each shard contains a dictionary of tensors, with weights normalized and cast to the specified dtype
+  (except layer norm weights which are converted to float32).
   """
   weights = {}
   for model_path in model_files:
@@ -265,7 +265,6 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers
   if metadata.original_quantization_config is not None:
     dequant_block_size = torch.tensor(metadata.original_quantization_config["weight_block_size"])
   tensors = {}
-  output_shards = []
 
   def conv(weight_name: str, scale_name: str):
     nonlocal progress
@@ -312,8 +311,8 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers
   )
 
   for l in range(config["num_hidden_layers"]):
-    if l % 8 == 0:
-      output_shards.append(tensors)
+    if l % 8 == 0 and l > 0:
+      yield tensors
       tensors = {}
     if n_layers is not None and l >= n_layers:
       break
@@ -413,10 +412,8 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers
     # Model output classifier just uses the word embeddings matrix
     pass
 
-  output_shards.append(tensors)
-  
-  print() # newline
-  return output_shards
+  print()  # newline
+  yield tensors
 
 if __name__ == "__main__":
   argp = argparse.ArgumentParser()
@@ -455,12 +452,12 @@ if __name__ == "__main__":
     metadata = Metadata(config, args.dtype, args.n_layers)
 
   tokens = load_tokens(args.tokenizer, metadata.vocab_size)
-  tensor_shards = load_weights(args.models, args.dtype, metadata, config.get("tie_word_embeddings", None), args.n_layers)
-
-  # add tokenizer tensors at the end (to maximize the chance of model tensor alignment)
-  # note: we concatenate all bytes of all tokens into a single tensor
-  tensor_shards[0]["tokenizer.tokens"] = torch.cat([torch.tensor([x for x in b] + [0], dtype=torch.uint8) for b in tokens])
-
-  print(f"Saving {sum([len(shard) for shard in tensor_shards])} tensors...")
-  for shard_idx, shard in enumerate(tensor_shards):
-    save_file(shard, os.path.join(args.output_dir, f"shard_{shard_idx:03d}_of_{len(tensor_shards):03d}.dseek"), metadata.to_dict())
+  
+  # Process and save weight shards
+  for shard_idx, shard in enumerate(load_weights(args.models, args.dtype, metadata, config.get("tie_word_embeddings", None), args.n_layers), 1):
+    if shard_idx == 0:
+      shard["tokenizer.tokens"] = torch.cat([torch.tensor([x for x in b] + [0], dtype=torch.uint8) for b in tokens])
+      save_file(shard, os.path.join(args.output_dir, f"shard_{shard_idx:03d}.dseek"), metadata.to_dict())
+    else:
+      save_file(shard, os.path.join(args.output_dir, f"shard_{shard_idx:03d}.dseek"), {})
+    print(f"\nSaved shard {shard_idx}", flush=True)
