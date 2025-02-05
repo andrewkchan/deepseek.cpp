@@ -159,6 +159,7 @@ int YALMData::from_directory(const std::string& dirname) {
   std::vector<std::string> files;
   DIR* dir = opendir(dirname.c_str());
   if (dir == nullptr) {
+    std::cout << "failed to open directory" << std::endl;
     return -1;
   }
 
@@ -174,6 +175,7 @@ int YALMData::from_directory(const std::string& dirname) {
   closedir(dir);
 
   if (files.empty()) {
+    std::cout << "no files found" << std::endl;
     return -1;
   }
 
@@ -182,12 +184,16 @@ int YALMData::from_directory(const std::string& dirname) {
 
   // Read first file with metadata
   if (update_from_file(files[0], true) != 0) {
+    std::cout << "failed to read metadata" << std::endl;
     return -1;
   }
+
+  std::cout << "read metadata " << metadata << std::endl;
 
   // Read remaining files without metadata
   for (size_t i = 1; i < files.size(); i++) {
     if (update_from_file(files[i], false) != 0) {
+      std::cout << "failed to read file " << files[i] << std::endl;
       return -1;
     }
   }
