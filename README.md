@@ -15,7 +15,7 @@ I was initially adding DeepSeek support to `yalm` but realized that the changes 
 
 # Instructions
 
-deepseek.cpp requires a computer with a C++20-compatible compiler. You'll also need a directory containing LLM safetensor weights and configuration files in huggingface format, which you'll need to convert into a `.dseek` file. Follow the below to download DeepSeek-V2-Lite, build `deepseek.cpp`, and run it:
+deepseek.cpp requires a computer with a C++20-compatible compiler. You'll also need a directory containing LLM safetensor weights and configuration files in huggingface format, which you'll need to convert by providing a directory into which `.dseek` files containing the converted weights will go. Follow the below to download DeepSeek-V2-Lite, build `deepseek.cpp`, and run it:
 
 ```
 # install git LFS
@@ -28,8 +28,8 @@ git clone https://github.com/andrewkchan/deepseek.cpp.git
 
 cd deepseek.cpp
 pip install -r requirements.txt
-python convert.py --dtype fp16 v2-lite-f16.dseek ../DeepSeek-V2-Lite/
-./build/main v2-lite-f16.dseek -i "What is a large language model?" -m c -t 0.5
+python convert.py --dtype fp16 v2-lite-f16 ../DeepSeek-V2-Lite/
+./build/main v2-lite-f16 -i "What is a large language model?" -m c -t 0.5
 ```
 
 ## Usage
@@ -37,8 +37,8 @@ python convert.py --dtype fp16 v2-lite-f16.dseek ../DeepSeek-V2-Lite/
 See the CLI help documentation below for `./build/main`:
 
 ```
-Usage:   main <checkpoint> [options]
-Example: main model.dseek -i "Q: What is the meaning of life?"
+Usage:   main <checkpoint_dir> [options]
+Example: main model_weights_dir/ -i "Q: What is the meaning of life?"
 Options:
   -h Display this help message
   -m [completion,passkey,perplexity] which mode to run in (default - completion)
