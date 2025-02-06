@@ -11,7 +11,7 @@ I was initially adding DeepSeek support to `yalm` but realized that the changes 
 | DeepSeek-V2-Lite | ✅ | WIP | ✅ | WIP | ✅ |
 | DeepSeek-V2 | ✅ | WIP | ✅ | WIP | ✅ |
 | DeepSeek-V2.5 | ✅ | WIP | ✅ | WIP | ✅ |
-| DeepSeek-V3 | WIP | WIP | - | - | - |
+| DeepSeek-V3 | ✅ | WIP | - | - | - |
 
 # Instructions
 
