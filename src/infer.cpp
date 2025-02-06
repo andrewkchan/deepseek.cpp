@@ -217,9 +217,12 @@ static void matmul(float* xout, float* x, f8e5m2_t* w, int n, int d, const int* 
     for (int j = 0; j < n; j+=16) {
       int scale_j = j / block_size[1];
       float scale_val = scale[scale_i * scale_num_cols + scale_j];
+
+      assert(i * n + j < n * d && "out of bounds");
+
       // Broadcast scale_val to all elements of a vector
       __m256 scale_vec = _mm256_set1_ps(scale_val);
-      
+
       // Extract the next set of 16 float8e5m2 weights from `w` and store them
       // to two separate float32 vectors of width 8 (`wveclo_ps`, `wvechi_ps`)
       __m128i wvec = _mm_loadu_si128((__m128i*)&w[i * n + j]);
@@ -697,12 +700,15 @@ void Block::_block_cpu(
     );
     for (int k = 0; k < c.n_active_routed; ++k) {
       int expert_index = s.active_experts()[k];
-      int expert_size = c.dim * c.moe_intermediate_size;
+      size_t expert_size = c.dim * c.moe_intermediate_size;
       int expert_scale13_size = cdiv(c.moe_intermediate_size, c.block_size[0]) * cdiv(c.dim, c.block_size[1]);
       int expert_scale2_size = cdiv(c.dim, c.block_size[0]) * cdiv(c.moe_intermediate_size, c.block_size[1]);
-      int weight_offset = expert_index * expert_size;
-      int scale13_offset = expert_index * expert_scale13_size;
-      int scale2_offset = expert_index * expert_scale2_size;
+      size_t weight_offset = expert_index * expert_size;
+      assert(weight_offset >= 0);
+      size_t scale13_offset = expert_index * expert_scale13_size;
+      assert(scale13_offset >= 0);
+      size_t scale2_offset = expert_index * expert_scale2_size;
+      assert(scale2_offset >= 0);
       // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
       // Note this is a feedforward with a GLU, not a simple MLP.
       matmul(s.hb(), s.xb(), w1<T>() + weight_offset, c.dim, c.moe_intermediate_size, c.block_size.data(), _s1 + scale13_offset);
