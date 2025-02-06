@@ -2,7 +2,11 @@ This is an CPU-only inference implementation for the DeepSeek family of large la
 
 ## Why?
 
-I was initially adding DeepSeek support to `yalm` but realized that the changes were large and complex enough that it might ruin the simplicity of that project. Maybe at some point I'll upstream the changes, but for fun I've decided to fork them into a separate, smaller, leaner codebase. Folks who want DeepSeek support on low-end CPU-only devices may also find this useful, especially since this program doesn't require a Python runtime and is tiny compared to other inference engines (<2k LOC not including `fmt` and `json`, vs. >250k for llama.cpp and vllm).
+For fun and learning!
+
+I was initially adding DeepSeek support to `yalm` but realized that the changes were large and complex enough that it might ruin the simplicity of that project. Maybe at some point I'll upstream the changes, but for now I've decided to fork them into a separate, smaller, leaner codebase. 
+
+Folks who want DeepSeek support on low-end CPU-only devices may also find this useful, especially since this program doesn't require a Python runtime and is tiny compared to other inference engines (<2k LOC not including `fmt` and `json`, vs. >250k for llama.cpp and vllm).
 
 ## Model support
 
@@ -12,6 +16,7 @@ I was initially adding DeepSeek support to `yalm` but realized that the changes 
 | DeepSeek-V2 | ✅ | WIP | ✅ | WIP | ✅ |
 | DeepSeek-V2.5 | ✅ | WIP | ✅ | WIP | ✅ |
 | DeepSeek-V3 | ✅ | WIP | - | - | - |
+| DeepSeek-R1 | ✅ | WIP | - | - | - |
 
 # Instructions
 
@@ -29,7 +34,7 @@ git clone https://github.com/andrewkchan/deepseek.cpp.git
 cd deepseek.cpp
 pip install -r requirements.txt
 python convert.py --dtype fp16 v2-lite-f16 ../DeepSeek-V2-Lite/
-./build/main v2-lite-f16 -i "What is a large language model?" -m c -t 0.5
+./build/main v2-lite-f16 -i "What is a large language model?" -m c -t 1.0
 ```
 
 ## Usage
