@@ -110,7 +110,6 @@ static void dump_debug_map(const std::string& filename) {
 
 static void matmul(float* xout, float* x, float* w, int n, int d, const int* block_size, float* scale) {
   // W (d,n) @ x (n,) -> xout (d,)
-  int i;
   static float one = 1.0f;
   int dummy_block_size[2] = {d, n};
   if (scale == nullptr) {
@@ -118,16 +117,27 @@ static void matmul(float* xout, float* x, float* w, int n, int d, const int* blo
     block_size = dummy_block_size;
   }
   int scale_num_cols = (n + block_size[1] - 1) / block_size[1];
-#pragma omp parallel for private(i)
-  for (i = 0; i < d; i++) {
-    int scale_i = i / block_size[0];
-    float val = 0.0f;
-    for (int j = 0; j < n; j++) {
-      int scale_j = j / block_size[1];
-      float scale_val = scale[scale_i * scale_num_cols + scale_j];
-      val += (w[i * n + j] * x[j]) * scale_val;
+  int scale_i;
+#pragma omp parallel for private(scale_i)
+  for (scale_i = 0; scale_i < cdiv(d, block_size[0]); scale_i++) {
+    for (int ii = 0; ii < block_size[0]; ii++) {
+      int i = scale_i * block_size[0] + ii;
+      if (i >= d) {
+        break;
+      }
+      float val = 0.0f;
+      for (int scale_j = 0; scale_j < cdiv(n, block_size[1]); scale_j++) {
+        float scale_val = scale[scale_i * scale_num_cols + scale_j];
+        for (int jj = 0; jj < block_size[1]; jj++) {
+          int j = scale_j * block_size[1] + jj;
+          if (j >= n) {
+            break;
+          }
+          val += (w[i * n + j] * x[j]) * scale_val;
+        }
+      }
+      xout[i] = val;
     }
-    xout[i] = val;
   }
 }
 
@@ -138,7 +148,6 @@ static void matmul(float* xout, float* x, f16_t* w, int n, int d, const int* blo
   // W (d,n) @ x (n,) -> xout (d,)
   assert(n % 16 == 0);
   assert(scale == nullptr || block_size[1] % 16 == 0);
-  int i;
   static float one = 1.0f;
   int dummy_block_size[2] = {d, n};
   if (scale == nullptr) {
@@ -146,46 +155,57 @@ static void matmul(float* xout, float* x, f16_t* w, int n, int d, const int* blo
     block_size = dummy_block_size;
   }
   int scale_num_cols = (n + block_size[1] - 1) / block_size[1];
-#pragma omp parallel for private(i)
-  for (i = 0; i < d; i++) {
-    int scale_i = i / block_size[0];
-    // Vectorized dot product of w[i][:] and x[:] where w is a packed float16 array.
-    __m256 sumlo = _mm256_setzero_ps();
-    __m256 sumhi = _mm256_setzero_ps();
-    for (int j = 0; j < n; j+=16) {
-      int scale_j = j / block_size[1];
-      float scale_val = scale[scale_i * scale_num_cols + scale_j];
-      // Broadcast scale_val to all elements of a vector
-      __m256 scale_vec = _mm256_set1_ps(scale_val);
-      
-      // Extract the next set of 16 float16 weights from `w` and store them
-      // to two separate float32 vectors of width 8 (`wveclo_ps`, `wvechi_ps`)
-      __m256i wvec = _mm256_loadu_si256((__m256i*)&w[i * n + j]);
-      __m128i wveclo = _mm256_extractf128_si256(wvec, 0);
-      __m128i wvechi = _mm256_extractf128_si256(wvec, 1);
-      __m256 wveclo_ps = _mm256_cvtph_ps(wveclo);
-      __m256 wvechi_ps = _mm256_cvtph_ps(wvechi);
-      
-      // Scale the weight vectors
-      wveclo_ps = _mm256_mul_ps(wveclo_ps, scale_vec);
-      wvechi_ps = _mm256_mul_ps(wvechi_ps, scale_vec);
-      
-      // Extract the next two float32 vectors of width 8 `xveclo`, `xvechi` from `x`
-      __m256 xveclo = _mm256_loadu_ps(&x[j]);
-      __m256 xvechi = _mm256_loadu_ps(&x[j + 8]);
-      
-      // Compute vectorized FMAs: sumlo += wveclo * xveclo, sumhi += wvechi * xvechi
-      sumlo = _mm256_fmadd_ps(wveclo_ps, xveclo, sumlo);
-      sumhi = _mm256_fmadd_ps(wvechi_ps, xvechi, sumhi);
+  int scale_i;
+#pragma omp parallel for private(scale_i)
+  for (scale_i = 0; scale_i < cdiv(d, block_size[0]); scale_i++) {
+    for (int ii = 0; ii < block_size[0]; ii++) {
+      int i = scale_i * block_size[0] + ii;
+      if (i >= d) {
+        break;
+      }
+      // Vectorized dot product of w[i][:] and x[:] where w is a packed float16 array.
+      __m256 sumlo = _mm256_setzero_ps();
+      __m256 sumhi = _mm256_setzero_ps();
+      for (int scale_j = 0; scale_j < cdiv(n, block_size[1]); scale_j++) {
+        // Broadcast scale_val to all elements of a vector
+        float scale_val = scale[scale_i * scale_num_cols + scale_j];
+        __m256 scale_vec = _mm256_set1_ps(scale_val);
+        for (int jj = 0; jj < block_size[1]; jj+=16) {
+          int j = scale_j * block_size[1] + jj;
+          if (j >= n) {
+            break;
+          }
+          
+          // Extract the next set of 16 float16 weights from `w` and store them
+          // to two separate float32 vectors of width 8 (`wveclo_ps`, `wvechi_ps`)
+          __m256i wvec = _mm256_loadu_si256((__m256i*)&w[i * n + j]);
+          __m128i wveclo = _mm256_extractf128_si256(wvec, 0);
+          __m128i wvechi = _mm256_extractf128_si256(wvec, 1);
+          __m256 wveclo_ps = _mm256_cvtph_ps(wveclo);
+          __m256 wvechi_ps = _mm256_cvtph_ps(wvechi);
+          
+          // Scale the weight vectors
+          wveclo_ps = _mm256_mul_ps(wveclo_ps, scale_vec);
+          wvechi_ps = _mm256_mul_ps(wvechi_ps, scale_vec);
+          
+          // Extract the next two float32 vectors of width 8 `xveclo`, `xvechi` from `x`
+          __m256 xveclo = _mm256_loadu_ps(&x[j]);
+          __m256 xvechi = _mm256_loadu_ps(&x[j + 8]);
+          
+          // Compute vectorized FMAs: sumlo += wveclo * xveclo, sumhi += wvechi * xvechi
+          sumlo = _mm256_fmadd_ps(wveclo_ps, xveclo, sumlo);
+          sumhi = _mm256_fmadd_ps(wvechi_ps, xvechi, sumhi);
+        }
+      }
+      // Horizontally reduce width-8 float32 vectors sumlo, sumhi to a scalar.
+      __m256 sum8 = _mm256_add_ps(sumlo, sumhi);              // sum8[0:8] = sumlo[0:8] + sumhi[0:8]
+      __m128 sum4 = _mm_add_ps(                               // sum4[0:4] = sum8[0:4] + sum8[4:8]
+        _mm256_extractf128_ps(sum8, 0), 
+        _mm256_extractf128_ps(sum8, 1)
+      );
+      __m128 sum1 = _mm_dp_ps(sum4, _mm_set1_ps(1.0f), 0xf1); // sum1[0] = dot(sum4, [1,1,1,1])
+      xout[i] = _mm_cvtss_f32(sum1);
     }
-    // Horizontally reduce width-8 float32 vectors sumlo, sumhi to a scalar.
-    __m256 sum8 = _mm256_add_ps(sumlo, sumhi);              // sum8[0:8] = sumlo[0:8] + sumhi[0:8]
-    __m128 sum4 = _mm_add_ps(                               // sum4[0:4] = sum8[0:4] + sum8[4:8]
-      _mm256_extractf128_ps(sum8, 0), 
-      _mm256_extractf128_ps(sum8, 1)
-    );
-    __m128 sum1 = _mm_dp_ps(sum4, _mm_set1_ps(1.0f), 0xf1); // sum1[0] = dot(sum4, [1,1,1,1])
-    xout[i] = _mm_cvtss_f32(sum1);
   }
 #else
   assert(false && "float16 not supported on this platform");
@@ -200,7 +220,6 @@ static void matmul(float* xout, float* x, f8e5m2_t* w, int n, int d, const int* 
   // W (d,n) @ x (n,) -> xout (d,)
   assert(n % 16 == 0);
   assert(scale == nullptr || block_size[1] % 16 == 0);
-  int i;
   static float one = 1.0f;
   int dummy_block_size[2] = {d, n};
   if (scale == nullptr) {
@@ -208,52 +227,60 @@ static void matmul(float* xout, float* x, f8e5m2_t* w, int n, int d, const int* 
     block_size = dummy_block_size;
   }
   int scale_num_cols = (n + block_size[1] - 1) / block_size[1];
-#pragma omp parallel for private(i)
-  for (i = 0; i < d; i++) {
-    int scale_i = i / block_size[0];
-    // Vectorized dot product of w[i][:] and x[:] where w is a packed float8e5m2 array.
-    __m256 sumlo = _mm256_setzero_ps();
-    __m256 sumhi = _mm256_setzero_ps();
-    for (int j = 0; j < n; j+=16) {
-      int scale_j = j / block_size[1];
-      float scale_val = scale[scale_i * scale_num_cols + scale_j];
+  int scale_i;
+#pragma omp parallel for private(scale_i)
+  for (scale_i = 0; scale_i < cdiv(d, block_size[0]); scale_i++) {
+    for (int ii = 0; ii < block_size[0]; ii++) {
+      int i = scale_i * block_size[0] + ii;
+      if (i >= d) {
+        break;
+      }
+      // Vectorized dot product of w[i][:] and x[:] where w is a packed float8e5m2 array.
+      __m256 sumlo = _mm256_setzero_ps();
+      __m256 sumhi = _mm256_setzero_ps();
+      for (int scale_j = 0; scale_j < cdiv(n, block_size[1]); scale_j++) {
+        // Broadcast scale_val to all elements of a vector
+        float scale_val = scale[scale_i * scale_num_cols + scale_j];
+        __m256 scale_vec = _mm256_set1_ps(scale_val);
+        for (int jj = 0; jj < block_size[1]; jj+=16) {
+          int j = scale_j * block_size[1] + jj;
+          if (j >= n) {
+            break;
+          }
 
-      assert(i * n + j < n * d && "out of bounds");
-
-      // Broadcast scale_val to all elements of a vector
-      __m256 scale_vec = _mm256_set1_ps(scale_val);
-
-      // Extract the next set of 16 float8e5m2 weights from `w` and store them
-      // to two separate float32 vectors of width 8 (`wveclo_ps`, `wvechi_ps`)
-      __m128i wvec = _mm_loadu_si128((__m128i*)&w[i * n + j]);
-      // Take each half of `wvec` which consists of 8 float8e5m2 weights and
-      // pad each 8-bit float8e5m2 value with 8 zeros in the mantissa (least significant bits),
-      // converting to 8 float16 values.
-      __m128i wveclo = _mm_unpacklo_epi8(_mm_setzero_si128(), wvec);
-      __m128i wvechi = _mm_unpackhi_epi8(_mm_setzero_si128(), wvec);
-      // Widen each 8xf16 vector to 8xf32.
-      __m256 wveclo_ps = _mm256_cvtph_ps(wveclo);
-      __m256 wvechi_ps = _mm256_cvtph_ps(wvechi);
-      
-      // Scale the weight vectors
-      wveclo_ps = _mm256_mul_ps(wveclo_ps, scale_vec);
-      wvechi_ps = _mm256_mul_ps(wvechi_ps, scale_vec);
-      
-      // Extract the next two float32 vectors of width 8 `xveclo`, `xvechi` from `x`
-      __m256 xveclo = _mm256_loadu_ps(&x[j]);
-      __m256 xvechi = _mm256_loadu_ps(&x[j + 8]);
-      // Compute vectorized FMAs: sumlo += wveclo * xveclo, sumhi += wvechi * xvechi
-      sumlo = _mm256_fmadd_ps(wveclo_ps, xveclo, sumlo);
-      sumhi = _mm256_fmadd_ps(wvechi_ps, xvechi, sumhi);
+          // Extract the next set of 16 float8e5m2 weights from `w` and store them
+          // to two separate float32 vectors of width 8 (`wveclo_ps`, `wvechi_ps`)
+          __m128i wvec = _mm_loadu_si128((__m128i*)&w[i * n + j]);
+          // Take each half of `wvec` which consists of 8 float8e5m2 weights and
+          // pad each 8-bit float8e5m2 value with 8 zeros in the mantissa (least significant bits),
+          // converting to 8 float16 values.
+          __m128i wveclo = _mm_unpacklo_epi8(_mm_setzero_si128(), wvec);
+          __m128i wvechi = _mm_unpackhi_epi8(_mm_setzero_si128(), wvec);
+          // Widen each 8xf16 vector to 8xf32.
+          __m256 wveclo_ps = _mm256_cvtph_ps(wveclo);
+          __m256 wvechi_ps = _mm256_cvtph_ps(wvechi);
+          
+          // Scale the weight vectors
+          wveclo_ps = _mm256_mul_ps(wveclo_ps, scale_vec);
+          wvechi_ps = _mm256_mul_ps(wvechi_ps, scale_vec);
+          
+          // Extract the next two float32 vectors of width 8 `xveclo`, `xvechi` from `x`
+          __m256 xveclo = _mm256_loadu_ps(&x[j]);
+          __m256 xvechi = _mm256_loadu_ps(&x[j + 8]);
+          // Compute vectorized FMAs: sumlo += wveclo * xveclo, sumhi += wvechi * xvechi
+          sumlo = _mm256_fmadd_ps(wveclo_ps, xveclo, sumlo);
+          sumhi = _mm256_fmadd_ps(wvechi_ps, xvechi, sumhi);
+        }
+      }
+      // Horizontally reduce width-8 float32 vectors sumlo, sumhi to a scalar.
+      __m256 sum8 = _mm256_add_ps(sumlo, sumhi);              // sum8[0:8] = sumlo[0:8] + sumhi[0:8]
+      __m128 sum4 = _mm_add_ps(                               // sum4[0:4] = sum8[0:4] + sum8[4:8]
+        _mm256_extractf128_ps(sum8, 0), 
+        _mm256_extractf128_ps(sum8, 1)
+      );
+      __m128 sum1 = _mm_dp_ps(sum4, _mm_set1_ps(1.0f), 0xf1); // sum1[0] = dot(sum4, [1,1,1,1])
+      xout[i] = _mm_cvtss_f32(sum1);
     }
-    // Horizontally reduce width-8 float32 vectors sumlo, sumhi to a scalar.
-    __m256 sum8 = _mm256_add_ps(sumlo, sumhi);              // sum8[0:8] = sumlo[0:8] + sumhi[0:8]
-    __m128 sum4 = _mm_add_ps(                               // sum4[0:4] = sum8[0:4] + sum8[4:8]
-      _mm256_extractf128_ps(sum8, 0), 
-      _mm256_extractf128_ps(sum8, 1)
-    );
-    __m128 sum1 = _mm_dp_ps(sum4, _mm_set1_ps(1.0f), 0xf1); // sum1[0] = dot(sum4, [1,1,1,1])
-    xout[i] = _mm_cvtss_f32(sum1);
   }
 #else
   assert(false && "float8e5m2 not supported on this platform");
