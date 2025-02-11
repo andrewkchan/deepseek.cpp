@@ -117,13 +117,13 @@ static void matmul(float* xout, float* x, float* w, int n, int d, const int* blo
     block_size = dummy_block_size;
   }
   int scale_num_cols = (n + block_size[1] - 1) / block_size[1];
-  int scale_i;
-#pragma omp parallel for private(scale_i)
-  for (scale_i = 0; scale_i < cdiv(d, block_size[0]); scale_i++) {
-    for (int ii = 0; ii < block_size[0]; ii++) {
+  for (int scale_i = 0; scale_i < cdiv(d, block_size[0]); scale_i++) {
+    int ii;
+#pragma omp parallel for private(ii)
+    for (ii = 0; ii < block_size[0]; ii++) {
       int i = scale_i * block_size[0] + ii;
       if (i >= d) {
-        break;
+        continue;
       }
       float val = 0.0f;
       for (int scale_j = 0; scale_j < cdiv(n, block_size[1]); scale_j++) {
@@ -155,13 +155,13 @@ static void matmul(float* xout, float* x, f16_t* w, int n, int d, const int* blo
     block_size = dummy_block_size;
   }
   int scale_num_cols = (n + block_size[1] - 1) / block_size[1];
-  int scale_i;
-#pragma omp parallel for private(scale_i)
-  for (scale_i = 0; scale_i < cdiv(d, block_size[0]); scale_i++) {
-    for (int ii = 0; ii < block_size[0]; ii++) {
+  for (int scale_i = 0; scale_i < cdiv(d, block_size[0]); scale_i++) {
+    int ii;
+#pragma omp parallel for private(ii)
+    for (ii = 0; ii < block_size[0]; ii++) {
       int i = scale_i * block_size[0] + ii;
       if (i >= d) {
-        break;
+        continue;
       }
       // Vectorized dot product of w[i][:] and x[:] where w is a packed float16 array.
       __m256 sumlo = _mm256_setzero_ps();
@@ -227,13 +227,13 @@ static void matmul(float* xout, float* x, f8e5m2_t* w, int n, int d, const int* 
     block_size = dummy_block_size;
   }
   int scale_num_cols = (n + block_size[1] - 1) / block_size[1];
-  int scale_i;
-#pragma omp parallel for private(scale_i)
-  for (scale_i = 0; scale_i < cdiv(d, block_size[0]); scale_i++) {
-    for (int ii = 0; ii < block_size[0]; ii++) {
+  for (int scale_i = 0; scale_i < cdiv(d, block_size[0]); scale_i++) {
+    int ii;
+#pragma omp parallel for private(ii)
+    for (ii = 0; ii < block_size[0]; ii++) {
       int i = scale_i * block_size[0] + ii;
       if (i >= d) {
-        break;
+        continue;
       }
       // Vectorized dot product of w[i][:] and x[:] where w is a packed float8e5m2 array.
       __m256 sumlo = _mm256_setzero_ps();
