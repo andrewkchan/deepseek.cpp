@@ -728,14 +728,11 @@ void Block::_block_cpu(
     for (int k = 0; k < c.n_active_routed; ++k) {
       int expert_index = s.active_experts()[k];
       size_t expert_size = c.dim * c.moe_intermediate_size;
-      int expert_scale13_size = cdiv(c.moe_intermediate_size, c.block_size[0]) * cdiv(c.dim, c.block_size[1]);
-      int expert_scale2_size = cdiv(c.dim, c.block_size[0]) * cdiv(c.moe_intermediate_size, c.block_size[1]);
+      int expert_scale13_size = _s1 ? cdiv(c.moe_intermediate_size, c.block_size[0]) * cdiv(c.dim, c.block_size[1]) : 0;
+      int expert_scale2_size = _s2 ? cdiv(c.dim, c.block_size[0]) * cdiv(c.moe_intermediate_size, c.block_size[1]) : 0;
       size_t weight_offset = expert_index * expert_size;
-      assert(weight_offset >= 0);
       size_t scale13_offset = expert_index * expert_scale13_size;
-      assert(scale13_offset >= 0);
       size_t scale2_offset = expert_index * expert_scale2_size;
-      assert(scale2_offset >= 0);
       // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
       // Note this is a feedforward with a GLU, not a simple MLP.
       matmul(s.hb(), s.xb(), w1<T>() + weight_offset, c.dim, c.moe_intermediate_size, c.block_size.data(), _s1 + scale13_offset);
