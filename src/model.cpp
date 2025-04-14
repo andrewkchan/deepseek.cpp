@@ -101,6 +101,7 @@ void Config::from_yalm(YALMData& yalm, int context) {
   } else if (dtype == "f8e5m2") {
     weight_dtype = DType::F8E5M2;
   } else {
+    // TODO: support Q2_K
     std::cerr << "FATAL: unsupported dtype: " << dtype << std::endl;
     assert(false);
   }
@@ -113,32 +114,31 @@ void Config::from_yalm(YALMData& yalm, int context) {
 }
 
 size_t Config::active_bytes(size_t pos) const {
-  size_t weight_size = dtype_size(weight_dtype);
+  float bytes_per_weight = bits_per_weight(weight_dtype, block_size[0] * block_size[1]) / 8.0;
 
   size_t bytes_per_block = 0;
   bytes_per_block += 2 * dim * sizeof(float); // rms_att_weight, rms_ffn_weight
   bytes_per_block += (kv_lora_rank + qk_rope_head_dim) * sizeof(float); // rms_kv_a_weight
-  bytes_per_block += n_heads * head_dim * dim * weight_size; // wq
-  bytes_per_block += (kv_lora_rank + qk_rope_head_dim) * dim * weight_size; // wkv_a
-  bytes_per_block += n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim) * kv_lora_rank * weight_size; // wkv_b
-  bytes_per_block += n_heads * v_head_dim * dim * weight_size; // wo
+  bytes_per_block += n_heads * head_dim * dim * bytes_per_weight; // wq
+  bytes_per_block += (kv_lora_rank + qk_rope_head_dim) * dim * bytes_per_weight; // wkv_a
+  bytes_per_block += n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim) * kv_lora_rank * bytes_per_weight; // wkv_b
+  bytes_per_block += n_heads * v_head_dim * dim * bytes_per_weight; // wo
   if (n_routed_experts > 0) {
     bytes_per_block += n_routed_experts * dim * sizeof(float); // moegate
     bytes_per_block += n_routed_experts * sizeof(float); // moegate_bias
-    bytes_per_block += n_active_routed * 3 * dim * moe_intermediate_size * weight_size; // w1, w2, w3
+    bytes_per_block += n_active_routed * 3 * dim * moe_intermediate_size * bytes_per_weight; // w1, w2, w3
   } else {
-    bytes_per_block += 3 * dim * hidden_dim * weight_size; // w1, w2, w3
+    bytes_per_block += 3 * dim * hidden_dim * bytes_per_weight; // w1, w2, w3
   }
   if (n_shared_experts > 0) {
-    bytes_per_block += n_shared_experts * dim * moe_intermediate_size * weight_size; // shared_w1, shared_w2, shared_w3
+    bytes_per_block += n_shared_experts * dim * moe_intermediate_size * bytes_per_weight; // shared_w1, shared_w2, shared_w3
   }
   size_t kv_len = std::min(static_cast<size_t>(max_seq_len), pos + 1);
   size_t kv_entry_size = sizeof(f16_t);
   bytes_per_block += 2 * kv_len * n_kv_heads * head_dim * kv_entry_size; // key_cache, value_cache
-  // TODO: add weight scales
 
   size_t bytes = 0;
-  bytes += dim * weight_size; // 1 row of token_embedding_table
+  bytes += dim * bytes_per_weight; // 1 row of token_embedding_table
   bytes += n_layers * bytes_per_block; // blocks
   bytes += dim * sizeof(float); // rms_final_weight
   bytes += vocab_size * dim * sizeof(float); // wcls

@@ -1,5 +1,7 @@
 #include "codec.h"
 
+#include "quant.h"
+
 #include <fcntl.h>
 #include <iostream>
 #include <sys/mman.h>
@@ -11,6 +13,7 @@ std::string dtype_to_string(DType dtype) {
     case DType::F32: return "F32";
     case DType::F16: return "F16";
     case DType::F8E5M2: return "F8_E5M2";
+    case DType::Q2_K: return "Q2_K";
   }
   __builtin_unreachable();
 }
@@ -22,16 +25,23 @@ std::optional<DType> string_to_dtype(const std::string& dtype_str) {
     return DType::F16;
   } else if (dtype_str == "F8_E5M2") {
     return DType::F8E5M2;
+  } else if (dtype_str == "Q2_K") {
+    return DType::Q2_K;
   } else {
     return std::nullopt;
   }
 }
 
-size_t dtype_size(DType dtype) {
+float bits_per_weight(DType dtype, size_t blockwise_quant_size) {
+  if (blockwise_quant_size > 0 && dtype != DType::F8E5M2) {
+    std::cerr << "blockwise quantization should only be used with F8E5M2" << std::endl;
+    assert(false);
+  }
   switch (dtype) {
     case DType::F32: return 4;
     case DType::F16: return 2;
-    case DType::F8E5M2: return 1;
+    case DType::F8E5M2: return (4 + blockwise_quant_size) / blockwise_quant_size;
+    case DType::Q2_K: return 2.625;
   }
   __builtin_unreachable();
 }
@@ -41,6 +51,7 @@ CodecDType dtype_to_codec_dtype(DType dtype) {
     case DType::F32: return CodecDType::F32;
     case DType::F16: return CodecDType::F16;
     case DType::F8E5M2: return CodecDType::F8E5M2;
+    case DType::Q2_K: return CodecDType::U8;
   }
   __builtin_unreachable();
 }
