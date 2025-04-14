@@ -9,14 +9,57 @@
 #include <dirent.h>
 #include <algorithm>
 #include <vector>
+#include <optional>
+
+#include "immintrin.h"
+#include "f16cintrin.h"
 
 using json = nlohmann::json;
 
 typedef uint16_t f16_t;
 typedef uint8_t f8e5m2_t;
 
-// TODO: Should this be narrowed down to what we actually support for model weight representation?
-enum class DType {
+#if defined(__AVX2__) && defined(__F16C__)
+inline float half_to_float(f16_t x) {
+  return _cvtsh_ss(x);
+}
+inline f16_t float_to_half(float x) {
+  return _cvtss_sh(x, 0);
+}
+#else
+inline float half_to_float(f16_t x) {
+  assert(false && "float16 not supported on this platform");
+  return 0.0f;
+}
+inline f16_t float_to_half(float x) {
+  assert(false && "float16 not supported on this platform");
+  return 0;
+}
+#endif
+
+inline float float8e5m2_to_float(f8e5m2_t x) {
+  f16_t val = 0;
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  memcpy(&val, &x, sizeof(f8e5m2_t));
+#else
+  memcpy((char*)&val + sizeof(f8e5m2_t), &x, sizeof(f8e5m2_t));
+#endif
+  return half_to_float(val);
+}
+[[maybe_unused]] inline f8e5m2_t float_to_float8e5m2(float x) {
+  f16_t val = float_to_half(x);
+  f8e5m2_t out;
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  memcpy(&out, (char*)&val, sizeof(f8e5m2_t)); // TODO: round instead of truncate?
+#else
+  memcpy(&out, (char*)&val + sizeof(f8e5m2_t), sizeof(f8e5m2_t)); // TODO: round instead of truncate?
+#endif
+  return out;
+}
+
+// DType of tensors saved in the file.
+// This corresponds to PyTorch tensor dtypes.
+enum class CodecDType {
   F32,
   F16,
   BF16,
@@ -27,12 +70,26 @@ enum class DType {
   I8,
   U8,
 };
+std::string codec_dtype_to_string(CodecDType dtype);
+std::optional<CodecDType> string_to_codec_dtype(const std::string& dtype_str);
+size_t codec_dtype_size(CodecDType dtype);
+
+// Internal DType.
+// This corresponds to the in-memory representation of tensors in the model.
+enum class DType {
+  F32,
+  F16,
+  F8E5M2,
+};
+
 std::string dtype_to_string(DType dtype);
+std::optional<DType> string_to_dtype(const std::string& dtype_str);
 size_t dtype_size(DType dtype);
+CodecDType dtype_to_codec_dtype(DType dtype);
 
 struct Tensor {
   std::string name;
-  DType dtype;
+  CodecDType dtype;
   std::array<int, 4> shape = {0, 0, 0, 0};
   void* data = nullptr;
   size_t size; // size in bytes (number of elements * element size)
