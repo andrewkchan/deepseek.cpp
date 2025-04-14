@@ -80,11 +80,12 @@ enum class DType {
   F32,
   F16,
   F8E5M2,
+  Q2_K, // 2-bit llama.cpp K-quants
 };
 
 std::string dtype_to_string(DType dtype);
 std::optional<DType> string_to_dtype(const std::string& dtype_str);
-size_t dtype_size(DType dtype);
+float bits_per_weight(DType dtype, size_t blockwise_quant_size);
 CodecDType dtype_to_codec_dtype(DType dtype);
 
 struct Tensor {
