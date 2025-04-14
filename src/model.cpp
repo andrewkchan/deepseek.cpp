@@ -152,13 +152,14 @@ void* check_tensor(const Tensor* tensor, DType weight_dtype, std::array<int, 4> 
     assert(false);
     return nullptr;
   }
-  if (tensor->dtype != weight_dtype || tensor->shape != shape) {
+  CodecDType expected_dtype = dtype_to_codec_dtype(weight_dtype);
+  if (tensor->dtype != expected_dtype || tensor->shape != shape) {
     std::cerr << "FATAL: tensor mismatch for " << tensor->name << std::endl;
     std::cerr 
-      << fmt::format("expected: dtype={}, shape=[{},{},{},{}]", dtype_to_string(weight_dtype), shape[0], shape[1], shape[2], shape[3]) 
+      << fmt::format("expected: dtype={}, shape=[{},{},{},{}]", codec_dtype_to_string(expected_dtype), shape[0], shape[1], shape[2], shape[3]) 
       << std::endl;
     std::cerr 
-      << fmt::format("got: dtype={}, shape=[{},{},{},{}]", dtype_to_string(tensor->dtype), tensor->shape[0], tensor->shape[1], tensor->shape[2], tensor->shape[3]) 
+      << fmt::format("got: dtype={}, shape=[{},{},{},{}]", codec_dtype_to_string(tensor->dtype), tensor->shape[0], tensor->shape[1], tensor->shape[2], tensor->shape[3]) 
       << std::endl;
     assert(false);
   }

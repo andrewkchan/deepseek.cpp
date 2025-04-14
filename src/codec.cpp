@@ -10,28 +10,91 @@ std::string dtype_to_string(DType dtype) {
   switch (dtype) {
     case DType::F32: return "F32";
     case DType::F16: return "F16";
-    case DType::BF16: return "BF16";
     case DType::F8E5M2: return "F8_E5M2";
-    case DType::F8E4M3: return "F8_E4M3";
-    case DType::I32: return "I32";
-    case DType::I16: return "I16";
-    case DType::I8: return "I8";
-    case DType::U8: return "U8";
   }
-  return "UNKNOWN";
+  __builtin_unreachable();
+}
+
+std::optional<DType> string_to_dtype(const std::string& dtype_str) {
+  if (dtype_str == "F32") {
+    return DType::F32;
+  } else if (dtype_str == "F16") {
+    return DType::F16;
+  } else if (dtype_str == "F8_E5M2") {
+    return DType::F8E5M2;
+  } else {
+    return std::nullopt;
+  }
 }
 
 size_t dtype_size(DType dtype) {
   switch (dtype) {
     case DType::F32: return 4;
     case DType::F16: return 2;
-    case DType::BF16: return 2;
     case DType::F8E5M2: return 1;
-    case DType::F8E4M3: return 1;
-    case DType::I32: return 4;
-    case DType::I16: return 2;
-    case DType::I8: return 1;
-    case DType::U8: return 1;
+  }
+  __builtin_unreachable();
+}
+
+CodecDType dtype_to_codec_dtype(DType dtype) {
+  switch (dtype) {
+    case DType::F32: return CodecDType::F32;
+    case DType::F16: return CodecDType::F16;
+    case DType::F8E5M2: return CodecDType::F8E5M2;
+  }
+  __builtin_unreachable();
+}
+
+std::string codec_dtype_to_string(CodecDType dtype) {
+  switch (dtype) {
+    case CodecDType::F32: return "F32";
+    case CodecDType::F16: return "F16";
+    case CodecDType::BF16: return "BF16";
+    case CodecDType::F8E5M2: return "F8_E5M2";
+    case CodecDType::F8E4M3: return "F8_E4M3";
+    case CodecDType::I32: return "I32";
+    case CodecDType::I16: return "I16";
+    case CodecDType::I8: return "I8";
+    case CodecDType::U8: return "U8";
+  }
+  return "UNKNOWN";
+}
+
+std::optional<CodecDType> string_to_codec_dtype(const std::string& dtype_str) {
+  if (dtype_str == "F32") {
+    return CodecDType::F32;
+  } else if (dtype_str == "F16") {
+    return CodecDType::F16;
+  } else if (dtype_str == "BF16") {
+    return CodecDType::BF16;
+  } else if (dtype_str == "F8_E5M2") {
+    return CodecDType::F8E5M2;
+  } else if (dtype_str == "F8_E4M3") {
+    return CodecDType::F8E4M3;
+  } else if (dtype_str == "I32") {
+    return CodecDType::I32;
+  } else if (dtype_str == "I16") {
+    return CodecDType::I16;
+  } else if (dtype_str == "I8") {
+    return CodecDType::I8;
+  } else if (dtype_str == "U8") {
+    return CodecDType::U8;
+  } else {
+    return std::nullopt;
+  }
+}
+
+size_t codec_dtype_size(CodecDType dtype) {
+  switch (dtype) {
+    case CodecDType::F32: return 4;
+    case CodecDType::F16: return 2;
+    case CodecDType::BF16: return 2;
+    case CodecDType::F8E5M2: return 1;
+    case CodecDType::F8E4M3: return 1;
+    case CodecDType::I32: return 4;
+    case CodecDType::I16: return 2;
+    case CodecDType::I8: return 1;
+    case CodecDType::U8: return 1;
   }
   return 0;
 }
@@ -39,29 +102,13 @@ size_t dtype_size(DType dtype) {
 int Tensor::from_json(const std::string& name, const json& val, void* bytes_ptr, size_t bytes_size) {
   this->name = name;
   std::string dtype_str = val.value("dtype", ""); 
-  if (dtype_str == "F32") {
-    this->dtype = DType::F32;
-  } else if (dtype_str == "F16") {
-    this->dtype = DType::F16;
-  } else if (dtype_str == "BF16") {
-    this->dtype = DType::BF16;
-  } else if (dtype_str == "F8_E5M2") {
-    this->dtype = DType::F8E5M2;
-  } else if (dtype_str == "F8_E4M3") {
-    this->dtype = DType::F8E4M3;
-  } else if (dtype_str == "I32") {
-    this->dtype = DType::I32;
-  } else if (dtype_str == "I16") {
-    this->dtype = DType::I16;
-  } else if (dtype_str == "I8") {
-    this->dtype = DType::I8;
-  } else if (dtype_str == "U8") {
-    this->dtype = DType::U8;
+  if (auto dtype = string_to_codec_dtype(dtype_str)) {
+    this->dtype = *dtype;
   } else {
     std::cerr << "bad dtype" << std::endl;
     return -1;
   }
-  size_t dsize = dtype_size(this->dtype);
+  size_t dsize = codec_dtype_size(this->dtype);
 
   size_t numel = 1;
   if (val.at("shape").size() > 4) {
