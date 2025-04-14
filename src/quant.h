@@ -49,3 +49,15 @@ typedef struct {
     uint32_t dm;
   };
 } block_q2_K;
+
+// Quantize an array of weights using Q2_K quantization
+// - x: pointer to the weights to quantize
+// - y: pointer to the quantized weights
+// - k: number of weights to quantize (must be a multiple of QK_K)
+void quantize_row_q2_K_ref(const float * __restrict__ x, block_q2_K * __restrict__ y, int64_t k);
+
+// Dequantize an array of Q2_K quantized weights
+// - x: pointer to the quantized weights
+// - y: pointer to the dequantized weights
+// - k: number of weights to dequantize (must be a multiple of QK_K)
+void dequantize_row_q2_K(const block_q2_K * __restrict__ x, float * __restrict__ y, int64_t k);
