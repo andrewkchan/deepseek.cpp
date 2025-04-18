@@ -11,6 +11,8 @@
 
 #include "immintrin.h"
 
+#include "quant.h"
+
 using json = nlohmann::json;
 
 int cdiv(int a, int b) {
@@ -153,13 +155,39 @@ void* check_tensor(const Tensor* tensor, Quant weight_quant, std::array<int, 4> 
     return nullptr;
   }
   CodecDType expected_dtype = quant_to_codec_dtype(weight_quant);
-  if (tensor->dtype != expected_dtype || tensor->shape != shape) {
+  std::array<int, 4> expected_codec_shape = shape;
+  if (weight_quant == Quant::Q2_K) {
+    size_t numel = 1;
+    for (int i = 0; i < 4; i++) {
+      if (shape[i] > 0) {
+        numel *= shape[i];
+      }
+    }
+    size_t total_blocks = numel / QK_K;
+    size_t total_bytes = total_blocks * sizeof(block_q2_K);
+    expected_codec_shape[0] = total_bytes;
+    expected_codec_shape[1] = 1;
+    expected_codec_shape[2] = 1;
+    expected_codec_shape[3] = 1;
+  }
+  if (tensor->dtype != expected_dtype || tensor->shape != expected_codec_shape) {
     std::cerr << "FATAL: tensor mismatch for " << tensor->name << std::endl;
     std::cerr 
-      << fmt::format("expected: dtype={}, shape=[{},{},{},{}]", codec_dtype_to_string(expected_dtype), shape[0], shape[1], shape[2], shape[3]) 
+      << fmt::format(
+        "expected: dtype={}, shape=[{},{},{},{}]", 
+        codec_dtype_to_string(expected_dtype), 
+        expected_codec_shape[0], 
+        expected_codec_shape[1], 
+        expected_codec_shape[2], 
+        expected_codec_shape[3]
+      ) 
       << std::endl;
     std::cerr 
-      << fmt::format("got: dtype={}, shape=[{},{},{},{}]", codec_dtype_to_string(tensor->dtype), tensor->shape[0], tensor->shape[1], tensor->shape[2], tensor->shape[3]) 
+      << fmt::format(
+        "got: dtype={}, shape=[{},{},{},{}]", 
+        codec_dtype_to_string(tensor->dtype), 
+        tensor->shape[0], tensor->shape[1], tensor->shape[2], tensor->shape[3]
+      ) 
       << std::endl;
     assert(false);
   }
