@@ -3,6 +3,8 @@
 #include "quant.h"
 
 torch::Tensor quantize_q2_k(torch::Tensor input) {
+  // Row-major quantization (equivalent to block size [1, 256]) 
+  // of input tensor using Q2_K scheme.
   const int64_t nrows = input.size(0);
   const int64_t ncols = input.size(1);
   const int64_t blocks_per_row = ncols / QK_K;
