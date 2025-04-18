@@ -12,7 +12,10 @@ import safetensors
 from safetensors.torch import save_file
 import torch
 
-from typing import Tuple, List
+from quantizer import quantize_q2_k
+
+from typing import Tuple, List, Literal
+import dataclasses
 
 SUPPORTED_ARCHITECTURES = [
   # TODO: Llama (deepseek 1)?
@@ -20,7 +23,26 @@ SUPPORTED_ARCHITECTURES = [
   "DeepseekV2ForCausalLM",
   "DeepseekV3ForCausalLM",
 ]
-SUPPORTED_QUANTS = ["fp32", "fp16", "f8e5m2"]
+
+@dataclasses.dataclass
+class BlockQuant:
+  name: Literal["fp32", "fp16", "f8e5m2"]
+  block_size: Tuple[int, int] | None
+  dtype: torch.dtype
+
+@dataclasses.dataclass
+class KQuant:
+  name: Literal["q2_k"]
+  dtype: torch.dtype
+
+Quant = BlockQuant | KQuant
+
+SUPPORTED_QUANTS = {
+  "fp32": BlockQuant(name="fp32", block_size=None, dtype=torch.float32),
+  "fp16": BlockQuant(name="fp16", block_size=None, dtype=torch.float16),
+  "f8e5m2": BlockQuant(name="f8e5m2", block_size=(128, 128), dtype=torch.float8_e5m2),
+  "q2_k": KQuant(name="q2_k", dtype=torch.uint8),
+}
 
 class Metadata:
   def __init__(self, config, quant, n_layers):
@@ -30,7 +52,7 @@ class Metadata:
     self.arch = arch
     if quant not in SUPPORTED_QUANTS:
       raise Exception(f"Quantization {quant} is not supported, must be one of {SUPPORTED_QUANTS}")
-    self.quant = quant
+    self.quant: Quant = SUPPORTED_QUANTS[quant]
     if arch in ["DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM"]:
       self.dim = config["hidden_size"]
       self.hidden_dim = config["intermediate_size"]
@@ -53,9 +75,6 @@ class Metadata:
         dequant_block_sizes = self.original_quantization_config["weight_block_size"]
         assert type(dequant_block_sizes) == list and len(dequant_block_sizes) == 2
         assert self.original_quantization_config["quant_method"] == "fp8"
-      self.quantization_block_size = None
-      if self.quant == "f8e5m2":
-        self.quantization_block_size = [128, 128]
 
       assert config.get("attention_bias", False) == False
       assert config.get("mlp_bias", False) == False
@@ -88,7 +107,7 @@ class Metadata:
   def to_dict(self):
     result = {}
     result["arch"] = self.arch
-    result["quant"] = self.quant
+    result["quant"] = self.quant.name
     if self.arch in ["DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM"]:
       result["dim"] = str(self.dim)
       result["hidden_dim"] = str(self.hidden_dim)
@@ -105,9 +124,9 @@ class Metadata:
       result["act_type"] = str(self.act_type)
       result["first_k_dense_replace"] = str(self.first_k_dense_replace)
       # quantization
-      if self.quantization_block_size is not None:
-        result["quantization_block_size_0"] = str(self.quantization_block_size[0])
-        result["quantization_block_size_1"] = str(self.quantization_block_size[1])
+      if self.quant.block_size is not None:
+        result["quantization_block_size_0"] = str(self.quant.block_size[0])
+        result["quantization_block_size_1"] = str(self.quant.block_size[1])
       # multi-latent attention
       result["kv_lora_rank"] = str(self.kv_lora_rank)
       result["q_lora_rank"] = str(self.q_lora_rank)
@@ -232,7 +251,13 @@ def blockwise_quantize(weight: torch.Tensor, block_size: torch.Tensor, dtype: to
       scale[i, j] = scale_block
   return out, scale
 
-def per_expert_quantize(expert_weights: torch.Tensor, block_size: torch.Tensor, dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
+def k_quantize(weight: torch.Tensor, method: Literal["q2_k"]) -> torch.Tensor:
+  if method == "q2_k":
+    return quantize_q2_k(weight)
+  else:
+    raise ValueError(f"Unsupported quantization method: {method}")
+
+def per_expert_blockwise_quantize(expert_weights: torch.Tensor, block_size: torch.Tensor, dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
   assert expert_weights.ndim == 3
   num_experts = expert_weights.shape[0]
   output_weights = []
@@ -243,7 +268,15 @@ def per_expert_quantize(expert_weights: torch.Tensor, block_size: torch.Tensor, 
     scales.append(scale)
   return torch.stack(output_weights), torch.stack(scales)
 
-def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers):
+def per_expert_k_quantize(expert_weights: torch.Tensor, method: Literal["q2_k"]) -> torch.Tensor:
+  assert expert_weights.ndim == 3
+  num_experts = expert_weights.shape[0]
+  output_weights = []
+  for e in range(num_experts):
+    output_weights.append(k_quantize(expert_weights[e], method))
+  return torch.stack(output_weights)
+
+def load_weights(model_files: List[str], metadata: Metadata, tie_word_embeddings: bool, n_layers: int):
   """
   Generator that yields shards of weights loaded from the model files in huggingface format.
   Each shard contains a dictionary of tensors, with weights normalized and cast to the specified dtype
@@ -257,7 +290,7 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers
         for k in f.keys():
           assert(k not in weights)
           weights[k] = f.get_tensor(k)
-  dtype = {"fp32": torch.float32, "fp16": torch.float16, "f8e5m2": torch.float8_e5m2}[dtype_str]
+  dtype = metadata.quant.dtype
 
   # convert weights
   progress = 0
@@ -266,7 +299,7 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers
     dequant_block_size = torch.tensor(metadata.original_quantization_config["weight_block_size"])
   tensors = {}
 
-  def conv(weight_name: str, scale_name: str):
+  def conv(weight_name: str, scale_name: str) -> Tuple[torch.Tensor, torch.Tensor]:
     nonlocal progress
     progress += 1
     t = weights[weight_name]
@@ -275,14 +308,16 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers
       t = blockwise_dequantize(t, scale, dequant_block_size)
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     if dtype not in [torch.float32, torch.float16]:
-      quant_block_size = torch.tensor(metadata.quantization_block_size)
-      if quant_block_size[0] == 0 and quant_block_size[1] == 0:
+      if isinstance(metadata.quant, KQuant):
+        t = k_quantize(t, metadata.quant.name)
+      elif metadata.quant.block_size is None:
         return per_tensor_quantize(t, dtype)
       else:
+        quant_block_size = torch.tensor(metadata.quant.block_size)
         return blockwise_quantize(t, quant_block_size, dtype)
     return t.to(dtype), None
   
-  def conv_experts(weight_and_scale_names: List[Tuple[str, str]]):
+  def conv_experts(weight_and_scale_names: List[Tuple[str, str]]) -> Tuple[torch.Tensor, torch.Tensor]:
     nonlocal progress
     progress += 1
     expert_weights = [weights[weight_name] for weight_name, _ in weight_and_scale_names]
@@ -293,11 +328,13 @@ def load_weights(model_files, dtype_str, metadata, tie_word_embeddings, n_layers
     t = torch.stack(expert_weights)
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     if dtype not in [torch.float32, torch.float16]:
-      quant_block_size = torch.tensor(metadata.quantization_block_size)
-      if quant_block_size[0] == 0 and quant_block_size[1] == 0:
+      if isinstance(metadata.quant, KQuant):
+        t = per_expert_k_quantize(t, metadata.quant.name)
+      elif metadata.quant.block_size is None:
         return per_tensor_quantize(t, dtype)
       else:
-        return per_expert_quantize(t, quant_block_size, dtype)
+        quant_block_size = torch.tensor(metadata.quant.block_size)
+        return per_expert_blockwise_quantize(t, quant_block_size, dtype)
     return t.to(dtype), None
   
   def save_weight_and_scale(weight_name: str, scale_name: str, weight_and_scale: Tuple[torch.Tensor, torch.Tensor]):
@@ -454,7 +491,7 @@ if __name__ == "__main__":
   tokens = load_tokens(args.tokenizer, metadata.vocab_size)
   
   # Process and save weight shards
-  for shard_idx, shard in enumerate(load_weights(args.models, args.quant, metadata, config.get("tie_word_embeddings", None), args.n_layers)):
+  for shard_idx, shard in enumerate(load_weights(args.models, metadata, config.get("tie_word_embeddings", None), args.n_layers)):
     if shard_idx == 0:
       shard["tokenizer.tokens"] = torch.cat([torch.tensor([x for x in b] + [0], dtype=torch.uint8) for b in tokens])
       save_file(shard, os.path.join(args.output_dir, f"shard_{shard_idx:03d}.dseek"), metadata.to_dict())
