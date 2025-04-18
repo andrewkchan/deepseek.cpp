@@ -8,50 +8,50 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-std::string dtype_to_string(DType dtype) {
-  switch (dtype) {
-    case DType::F32: return "F32";
-    case DType::F16: return "F16";
-    case DType::F8E5M2: return "F8_E5M2";
-    case DType::Q2_K: return "Q2_K";
+std::string quant_to_string(Quant quant) {
+  switch (quant) {
+    case Quant::F32: return "F32";
+    case Quant::F16: return "F16";
+    case Quant::F8E5M2: return "F8_E5M2";
+    case Quant::Q2_K: return "Q2_K";
   }
   __builtin_unreachable();
 }
 
-std::optional<DType> string_to_dtype(const std::string& dtype_str) {
-  if (dtype_str == "F32") {
-    return DType::F32;
-  } else if (dtype_str == "F16") {
-    return DType::F16;
-  } else if (dtype_str == "F8_E5M2") {
-    return DType::F8E5M2;
-  } else if (dtype_str == "Q2_K") {
-    return DType::Q2_K;
+std::optional<Quant> string_to_quant(const std::string& quant_str) {
+  if (quant_str == "F32") {
+    return Quant::F32;
+  } else if (quant_str == "F16") {
+    return Quant::F16;
+  } else if (quant_str == "F8_E5M2") {
+    return Quant::F8E5M2;
+  } else if (quant_str == "Q2_K") {
+    return Quant::Q2_K;
   } else {
     return std::nullopt;
   }
 }
 
-float bits_per_weight(DType dtype, size_t blockwise_quant_size) {
-  if (blockwise_quant_size > 0 && dtype != DType::F8E5M2) {
+float bits_per_weight(Quant quant, size_t blockwise_quant_size) {
+  if (blockwise_quant_size > 0 && quant != Quant::F8E5M2) {
     std::cerr << "blockwise quantization should only be used with F8E5M2" << std::endl;
     assert(false);
   }
-  switch (dtype) {
-    case DType::F32: return 4;
-    case DType::F16: return 2;
-    case DType::F8E5M2: return (4 + blockwise_quant_size) / blockwise_quant_size;
-    case DType::Q2_K: return 2.625;
+  switch (quant) {
+    case Quant::F32: return 4;
+    case Quant::F16: return 2;
+    case Quant::F8E5M2: return (4 + blockwise_quant_size) / blockwise_quant_size;
+    case Quant::Q2_K: return 2.625;
   }
   __builtin_unreachable();
 }
 
-CodecDType dtype_to_codec_dtype(DType dtype) {
-  switch (dtype) {
-    case DType::F32: return CodecDType::F32;
-    case DType::F16: return CodecDType::F16;
-    case DType::F8E5M2: return CodecDType::F8E5M2;
-    case DType::Q2_K: return CodecDType::U8;
+CodecDType quant_to_codec_dtype(Quant quant) {
+  switch (quant) {
+    case Quant::F32: return CodecDType::F32;
+    case Quant::F16: return CodecDType::F16;
+    case Quant::F8E5M2: return CodecDType::F8E5M2;
+    case Quant::Q2_K: return CodecDType::U8;
   }
   __builtin_unreachable();
 }

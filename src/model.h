@@ -75,7 +75,7 @@ struct Config {
   int head_dim;             // dimension of each attention head, equal to qk_nope_head_dim + qk_rope_head_dim
   // Data type of the weights according to config, used
   // to safety check tensor dtype at initialization time.
-  DType weight_dtype;
+  Quant weight_quant;
   // Block size for weight quantization if present
   // If weights are quantized but block size is (0, 0), then we are using
   // per-tensor quantization.
