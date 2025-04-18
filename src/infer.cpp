@@ -843,22 +843,22 @@ template void Block::_block_cpu<f8e5m2_t>(InferenceState&, int, int, int, int) c
 
 void Model::_copy_embedding(InferenceState& s, int token) {
   const Config& c = *config;
-  switch (c.weight_dtype) {
-    case DType::F32: {
+  switch (c.weight_quant) {
+    case Quant::F32: {
       float* emb = static_cast<float*>(token_embedding_table);
       for (int i = 0; i < c.dim; ++i) {
         s.x()[i] = emb[token * c.dim + i];
       }
       break;
     }
-    case DType::F16: {
+    case Quant::F16: {
       f16_t* emb = static_cast<f16_t*>(token_embedding_table);
       for (int i = 0; i < c.dim; i+=1) {
         s.x()[i] = half_to_float(emb[token * c.dim + i]);
       }
       break;
     }
-    case DType::F8E5M2: {
+    case Quant::F8E5M2: {
       f8e5m2_t* emb = static_cast<f8e5m2_t*>(token_embedding_table);
       int* block_size = config->block_size.data();
       int scale_num_cols = (c.dim + block_size[1] - 1) / block_size[1];
@@ -871,7 +871,7 @@ void Model::_copy_embedding(InferenceState& s, int token) {
       break;
     }
     default: {
-      assert(false && "unsupported weight dtype");
+      assert(false && "unsupported weight quantization");
     }
   }
 }
@@ -908,21 +908,21 @@ void Model::_forward_cpu(InferenceState& s, int token, int pos, InferenceMode mo
   }
 
   // classifier into logits
-  switch (c.weight_dtype) {
-    case DType::F32: {
+  switch (c.weight_quant) {
+    case Quant::F32: {
       matmul_unscaled(s.logits(), s.x(), static_cast<float*>(wcls), c.dim, c.vocab_size);
       break;
     }
-    case DType::F16: {
+    case Quant::F16: {
       matmul_unscaled(s.logits(), s.x(), static_cast<f16_t*>(wcls), c.dim, c.vocab_size);
       break;
     }
-    case DType::F8E5M2: {
+    case Quant::F8E5M2: {
       matmul(s.logits(), s.x(), static_cast<f8e5m2_t*>(wcls), c.dim, c.vocab_size, c.block_size.data(), scls);
       break;
     }
     default: {
-      assert(false && "unsupported weight dtype");
+      assert(false && "unsupported weight quantization");
     }
   }
 }

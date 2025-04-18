@@ -57,7 +57,7 @@ inline float float8e5m2_to_float(f8e5m2_t x) {
   return out;
 }
 
-// DType of tensors saved in the file.
+// Quant of tensors saved in the file.
 // This corresponds to PyTorch tensor dtypes.
 enum class CodecDType {
   F32,
@@ -74,19 +74,19 @@ std::string codec_dtype_to_string(CodecDType dtype);
 std::optional<CodecDType> string_to_codec_dtype(const std::string& dtype_str);
 size_t codec_dtype_size(CodecDType dtype);
 
-// Internal DType.
+// Internal Quant.
 // This corresponds to the in-memory representation of tensors in the model.
-enum class DType {
+enum class Quant {
   F32,
   F16,
   F8E5M2,
   Q2_K, // 2-bit llama.cpp K-quants
 };
 
-std::string dtype_to_string(DType dtype);
-std::optional<DType> string_to_dtype(const std::string& dtype_str);
-float bits_per_weight(DType dtype, size_t blockwise_quant_size);
-CodecDType dtype_to_codec_dtype(DType dtype);
+std::string quant_to_string(Quant quant);
+std::optional<Quant> string_to_quant(const std::string& quant_str);
+float bits_per_weight(Quant quant, size_t blockwise_quant_size);
+CodecDType quant_to_codec_dtype(Quant quant);
 
 struct Tensor {
   std::string name;
