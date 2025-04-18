@@ -20,17 +20,17 @@ SUPPORTED_ARCHITECTURES = [
   "DeepseekV2ForCausalLM",
   "DeepseekV3ForCausalLM",
 ]
-SUPPORTED_DTYPES = ["fp32", "fp16", "f8e5m2"]
+SUPPORTED_QUANTS = ["fp32", "fp16", "f8e5m2"]
 
 class Metadata:
-  def __init__(self, config, dtype, n_layers):
+  def __init__(self, config, quant, n_layers):
     arch = config["architectures"][0]
     if arch not in SUPPORTED_ARCHITECTURES:
       raise Exception(f"Architecture {arch} is not supported, must be one of {SUPPORTED_ARCHITECTURES}")
     self.arch = arch
-    if dtype not in SUPPORTED_DTYPES:
-      raise Exception(f"Data type {dtype} is not supported, must be one of {SUPPORTED_DTYPES}")
-    self.dtype = dtype
+    if quant not in SUPPORTED_QUANTS:
+      raise Exception(f"Quantization {quant} is not supported, must be one of {SUPPORTED_QUANTS}")
+    self.quant = quant
     if arch in ["DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM"]:
       self.dim = config["hidden_size"]
       self.hidden_dim = config["intermediate_size"]
@@ -54,7 +54,7 @@ class Metadata:
         assert type(dequant_block_sizes) == list and len(dequant_block_sizes) == 2
         assert self.original_quantization_config["quant_method"] == "fp8"
       self.quantization_block_size = None
-      if self.dtype == "f8e5m2":
+      if self.quant == "f8e5m2":
         self.quantization_block_size = [128, 128]
 
       assert config.get("attention_bias", False) == False
@@ -88,7 +88,7 @@ class Metadata:
   def to_dict(self):
     result = {}
     result["arch"] = self.arch
-    result["dtype"] = self.dtype
+    result["quant"] = self.quant
     if self.arch in ["DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM"]:
       result["dim"] = str(self.dim)
       result["hidden_dim"] = str(self.hidden_dim)
@@ -419,7 +419,7 @@ if __name__ == "__main__":
   argp = argparse.ArgumentParser()
   argp.add_argument("output_dir", type=str)
   argp.add_argument("input", type=str, nargs="?")
-  argp.add_argument("--dtype", type=str, default="fp16", choices=SUPPORTED_DTYPES)
+  argp.add_argument("--quant", type=str, default="fp16", choices=SUPPORTED_QUANTS)
   argp.add_argument("--n-layers", type=int, default=None, help="number of layers to convert (if None, convert all)")
   args = argp.parse_args()
 
@@ -449,12 +449,12 @@ if __name__ == "__main__":
 
   with open(args.config, "r") as f:
     config = json.load(f)
-    metadata = Metadata(config, args.dtype, args.n_layers)
+    metadata = Metadata(config, args.quant, args.n_layers)
 
   tokens = load_tokens(args.tokenizer, metadata.vocab_size)
   
   # Process and save weight shards
-  for shard_idx, shard in enumerate(load_weights(args.models, args.dtype, metadata, config.get("tie_word_embeddings", None), args.n_layers)):
+  for shard_idx, shard in enumerate(load_weights(args.models, args.quant, metadata, config.get("tie_word_embeddings", None), args.n_layers)):
     if shard_idx == 0:
       shard["tokenizer.tokens"] = torch.cat([torch.tensor([x for x in b] + [0], dtype=torch.uint8) for b in tokens])
       save_file(shard, os.path.join(args.output_dir, f"shard_{shard_idx:03d}.dseek"), metadata.to_dict())

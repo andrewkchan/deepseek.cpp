@@ -93,16 +93,16 @@ void Config::from_yalm(YALMData& yalm, int context) {
   first_k_dense_replace = yalm.metadata.contains("first_k_dense_replace") ? 
     std::stoi(yalm.metadata.at("first_k_dense_replace").get<std::string>()) : 0;
 
-  std::string dtype = yalm.metadata.at("dtype").get<std::string>();
-  if (dtype == "fp32") {
+  std::string quant = yalm.metadata.at("quant").get<std::string>();
+  if (quant == "fp32") {
     weight_dtype = DType::F32;
-  } else if (dtype == "fp16") {
+  } else if (quant == "fp16") {
     weight_dtype = DType::F16;
-  } else if (dtype == "f8e5m2") {
+  } else if (quant == "f8e5m2") {
     weight_dtype = DType::F8E5M2;
   } else {
     // TODO: support Q2_K
-    std::cerr << "FATAL: unsupported dtype: " << dtype << std::endl;
+    std::cerr << "FATAL: unsupported quant: " << quant << std::endl;
     assert(false);
   }
 

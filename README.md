@@ -33,7 +33,7 @@ git clone https://github.com/andrewkchan/deepseek.cpp.git
 
 cd deepseek.cpp
 pip install -r requirements.txt
-python convert.py --dtype fp16 v2-lite-f16 ../DeepSeek-V2-Lite/
+python convert.py --quant fp16 v2-lite-f16 ../DeepSeek-V2-Lite/
 ./build/main v2-lite-f16 -i "What is a large language model?" -m c -t 1.0
 ```
 
