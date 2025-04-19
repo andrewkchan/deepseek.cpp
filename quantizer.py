@@ -22,15 +22,6 @@ def quantize_q2_k(tensor: torch.Tensor) -> torch.Tensor:
     tensor: Input tensor of shape (M, N) where N must be a multiple of 256
   
   Returns:
-    Quantized tensor of type uint8 containing the block_q2_K data
-  """
-  if tensor.dim() != 2:
-    raise ValueError("Input tensor must be 2-dimensional")
-  if tensor.dtype != torch.float32:
-    raise ValueError("Input tensor must be float32")
-  if tensor.shape[1] % 256 != 0:
-    raise ValueError("Input tensor's second dimension must be a multiple of 256")
-  if not tensor.is_contiguous():
-    tensor = tensor.contiguous()
-      
+    Quantized tensor of type uint8 and shape (M, sizeof(block_q2_K) * N/256) containing the block_q2_K data
+  """ 
   return quantizer_cpp.quantize_q2_k(tensor) 

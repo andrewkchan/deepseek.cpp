@@ -2,19 +2,22 @@
 #include <vector>
 #include "quant.h"
 
-torch::Tensor quantize_q2_k(torch::Tensor input) {
+torch::Tensor quantize_q2_k(torch::Tensor& input) {
   // Row-major quantization (equivalent to block size [1, 256]) 
   // of input tensor using Q2_K scheme.
+  assert(input.ndimension() == 2 && "input must be 2D");
+  assert(input.size(1) % QK_K == 0 && "ncols must be divisible by QK_K");
+  assert(input.dtype() == torch::kFloat32 && "input must be float32");
+  if (!input.is_contiguous()) {
+    input = input.contiguous();
+  }
   const int64_t nrows = input.size(0);
   const int64_t ncols = input.size(1);
   const int64_t blocks_per_row = ncols / QK_K;
-  
   const int64_t block_size = sizeof(block_q2_K);
-  const int64_t total_blocks = nrows * blocks_per_row;
-  const int64_t total_bytes = total_blocks * block_size;
   
   auto options = torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCPU);
-  auto output = torch::empty({total_bytes}, options);
+  auto output = torch::empty({nrows, blocks_per_row * block_size}, options);
   
   const float* input_ptr = input.data_ptr<float>();
   uint8_t* output_ptr = output.data_ptr<uint8_t>();
