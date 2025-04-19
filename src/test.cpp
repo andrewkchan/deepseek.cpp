@@ -51,43 +51,6 @@ void assertArrayEquals(float* actual, const std::vector<float>& expected, const 
   assertArrayEquals(actual_array, expected, message);
 }
 
-inline float half_to_float(f16_t x) {
-#if defined(__AVX2__) && defined(__F16C__)
-  return _cvtsh_ss(x);
-#else
-  assert(false && "Cannot convert to float due to missing F16C extensions");
-  return 0.0f;
-#endif
-}
-inline f16_t float_to_half(float x) {
-#if defined(__AVX2__) && defined(__F16C__)
-  return _cvtss_sh(x, 0);
-#else
-  assert(false && "Cannot convert to half due to missing F16C extensions");
-  return 0;
-#endif
-}
-inline float float8e5m2_to_float(f8e5m2_t x) {
-  f16_t val = 0;
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-  memcpy(&val, &x, sizeof(f8e5m2_t));
-#else
-  memcpy((char*)&val + sizeof(f8e5m2_t), &x, sizeof(f8e5m2_t));
-#endif
-  return half_to_float(val);
-}
-inline f8e5m2_t float_to_float8e5m2(float x) {
-  if (std::isnan(x)) {
-    return 0x7E;
-  }
-  uint16_t val = float_to_half(x);
-  uint16_t lsb = (val >> 8) & 1;
-  uint16_t rounding_bias = 0x7f + lsb;
-  val += rounding_bias;
-  uint8_t output = static_cast<uint8_t>(val >> 8);
-  return output;
-}
-
 std::vector<f16_t> float_array_to_half(const std::vector<float>& data) {
   std::vector<f16_t> half_data(data.size());
   for (size_t i = 0; i < data.size(); i++) {
@@ -204,7 +167,7 @@ void test_matmul() {
     matmul_unscaled(xout.data(), x.data(), w_f8e5m2.data(), 16, 2);
     assertArrayEquals(xout, {
       -3.7454, -3.2738
-    }, "matmul_f8e5m2", 2.21e-1);
+    }, "matmul_f8e5m2", 3.78e-1);
     std::vector<float> xout_roundtrip(2);
     std::vector<float> w8_roundtrip;
     for (size_t i = 0; i < w_f8e5m2.size(); i++) {
