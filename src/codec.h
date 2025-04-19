@@ -85,7 +85,7 @@ enum class Quant {
 
 std::string quant_to_string(Quant quant);
 std::optional<Quant> string_to_quant(const std::string& quant_str);
-float bits_per_weight(Quant quant, size_t blockwise_quant_size);
+double bits_per_weight(Quant quant, size_t blockwise_quant_size);
 CodecDType quant_to_codec_dtype(Quant quant);
 
 struct Tensor {

@@ -32,7 +32,7 @@ std::optional<Quant> string_to_quant(const std::string& quant_str) {
   }
 }
 
-float bits_per_weight(Quant quant, size_t blockwise_quant_size) {
+double bits_per_weight(Quant quant, size_t blockwise_quant_size) {
   if (blockwise_quant_size > 0 && quant != Quant::F8E5M2) {
     std::cerr << "blockwise quantization should only be used with F8E5M2" << std::endl;
     assert(false);

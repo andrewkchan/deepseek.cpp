@@ -83,7 +83,7 @@ struct Config {
 
   // If nonzero `context` is supplied, max sequence length is limited to `context`.
   void from_yalm(YALMData& yalm, int context = 0);
-  size_t active_bytes(size_t pos) const;
+  double active_bytes(size_t pos) const;
 };
 
 // Buffer for all state used during a forward pass.
