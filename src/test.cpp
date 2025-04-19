@@ -8,7 +8,7 @@
 #include "immintrin.h"
 
 #include "model.h"
-#include "time.h"
+#include "time_utils.h"
 
 bool floatEquals(float a, float b, float epsilon = 1e-5) {
   return std::abs(a - b) < epsilon;

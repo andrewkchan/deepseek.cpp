@@ -23,9 +23,9 @@ Folks who want DeepSeek support on low-end CPU-only devices may also find this u
 deepseek.cpp requires a computer with a C++20-compatible compiler. You'll also need a directory containing LLM safetensor weights and configuration files in huggingface format, which you'll need to convert by providing a directory into which `.dseek` files containing the converted weights will go. Follow the below to download DeepSeek-V2-Lite, build `deepseek.cpp`, and run it:
 
 ```
-# install git LFS
+# install git LFS and build tools
 curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
-sudo apt-get -y install git-lfs
+sudo apt-get -y install git-lfs python3-dev build-essential
 # download DeepSeek-V2-Lite
 git clone https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite
 # clone this repository

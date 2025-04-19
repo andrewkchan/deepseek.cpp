@@ -1,18 +1,5 @@
-import os
 import torch
-from torch.utils.cpp_extension import load
-
-# Load and compile on-the-fly
-current_dir = os.path.dirname(os.path.abspath(__file__))
-quantizer_cpp = load(
-  name="quantizer",
-  sources=[
-    os.path.join(current_dir, "quantizer.cpp"),
-    os.path.join(current_dir, "src/quant.cpp")
-  ],
-  extra_include_paths=[os.path.join(current_dir, "src")],
-  verbose=True
-)
+import quantizer_cpp
 
 def quantize_q2_k(tensor: torch.Tensor) -> torch.Tensor:
   """
