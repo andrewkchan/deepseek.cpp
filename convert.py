@@ -309,7 +309,7 @@ def load_weights(model_files: List[str], metadata: Metadata, tie_word_embeddings
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     if dtype not in [torch.float32, torch.float16]:
       if isinstance(metadata.quant, KQuant):
-        t = k_quantize(t, metadata.quant.name)
+        t = k_quantize(t.to(torch.float32), metadata.quant.name)
       elif metadata.quant.block_size is None:
         return per_tensor_quantize(t, dtype)
       else:
@@ -329,7 +329,7 @@ def load_weights(model_files: List[str], metadata: Metadata, tie_word_embeddings
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     if dtype not in [torch.float32, torch.float16]:
       if isinstance(metadata.quant, KQuant):
-        t = per_expert_k_quantize(t, metadata.quant.name)
+        t = per_expert_k_quantize(t.to(torch.float32), metadata.quant.name)
       elif metadata.quant.block_size is None:
         return per_tensor_quantize(t, dtype)
       else:
