@@ -116,10 +116,10 @@ void Config::from_yalm(YALMData& yalm, int context) {
   }
 }
 
-size_t Config::active_bytes(size_t pos) const {
-  float bytes_per_weight = bits_per_weight(weight_quant, block_size[0] * block_size[1]) / 8.0;
+double Config::active_bytes(size_t pos) const {
+  double bytes_per_weight = bits_per_weight(weight_quant, block_size[0] * block_size[1]) / 8.0;
 
-  size_t bytes_per_block = 0;
+  double bytes_per_block = 0;
   bytes_per_block += 2 * dim * sizeof(float); // rms_att_weight, rms_ffn_weight
   bytes_per_block += (kv_lora_rank + qk_rope_head_dim) * sizeof(float); // rms_kv_a_weight
   bytes_per_block += n_heads * head_dim * dim * bytes_per_weight; // wq
@@ -140,7 +140,7 @@ size_t Config::active_bytes(size_t pos) const {
   size_t kv_entry_size = sizeof(f16_t);
   bytes_per_block += 2 * kv_len * n_kv_heads * head_dim * kv_entry_size; // key_cache, value_cache
 
-  size_t bytes = 0;
+  double bytes = 0;
   bytes += dim * bytes_per_weight; // 1 row of token_embedding_table
   bytes += n_layers * bytes_per_block; // blocks
   bytes += dim * sizeof(float); // rms_final_weight
