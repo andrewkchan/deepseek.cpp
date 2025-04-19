@@ -4,6 +4,8 @@
 #include <cfloat>
 #include <math.h>
 
+#include "quant.h"
+
 #if DEBUG_MODEL
 #include "fmt/format.h"
 static std::map<std::string, DebugTensor> _debug_map;
@@ -67,8 +69,13 @@ static void dump_debug_map(const std::string& filename) {
 }
 #endif
 
-static void matmul(float* xout, float* x, float* w, int n, int d, const int* block_size, float* scale) {
+static void matmul(
+  float* xout, float* x, float* w, int n, int d, 
+  const int* block_size, float* scale,
+  float* unused_dequant_buf
+) {
   // W (d,n) @ x (n,) -> xout (d,)
+  (void)unused_dequant_buf;
   static float one = 1.0f;
   int dummy_block_size[2] = {d, n};
   if (scale == nullptr) {
@@ -102,7 +109,12 @@ static void matmul(float* xout, float* x, float* w, int n, int d, const int* blo
 
 // matmul supporting float16 weights via the F16C extension, which allows
 // conversion into float32 values before calculations.
-static void matmul(float* xout, float* x, f16_t* w, int n, int d, const int* block_size, float* scale) {
+static void matmul(
+  float* xout, float* x, f16_t* w, int n, int d, 
+  const int* block_size, float* scale,
+  float* unused_dequant_buf
+) {
+  (void)unused_dequant_buf;
 #if defined(__AVX2__) && defined(__F16C__)
   // W (d,n) @ x (n,) -> xout (d,)
   assert(n % 16 == 0);
@@ -174,7 +186,12 @@ static void matmul(float* xout, float* x, f16_t* w, int n, int d, const int* blo
 // matmul supporting float8e5m2 weights via AVX2 and F16C extensions, which (1) 
 // allows vectorized conversion from f8e5m2 to float16 and (2) conversion from 
 // float16 to float32 values before calculations.
-static void matmul(float* xout, float* x, f8e5m2_t* w, int n, int d, const int* block_size, float* scale) {
+static void matmul(
+  float* xout, float* x, f8e5m2_t* w, int n, int d, 
+  const int* block_size, float* scale,
+  float* unused_dequant_buf
+) {
+  (void)unused_dequant_buf;
 #if defined(__AVX2__) && defined(__F16C__)
   // W (d,n) @ x (n,) -> xout (d,)
   assert(n % 16 == 0);
@@ -244,6 +261,28 @@ static void matmul(float* xout, float* x, f8e5m2_t* w, int n, int d, const int* 
 #else
   assert(false && "float8e5m2 not supported on this platform");
 #endif
+}
+
+static void matmul(
+  float* xout, float* x, block_q2_K* w, int n, int d, 
+  const int* unused_block_size, float* unused_scale,
+  float* dequant_buf
+) {
+  // W (d,n) @ x (n,) -> xout (d,)
+  (void)unused_block_size;
+  (void)unused_scale;
+  size_t blocks_per_row = n / QK_K;
+  int i;
+#pragma omp parallel for private(i)
+  for (i = 0; i < d; i++) {
+    // TODO: do tiling dequant so it fits into cache?
+    dequantize_row_q2_K(w + i * blocks_per_row, dequant_buf + i * n, n);
+    float val = 0.0f;
+    for (int j = 0; j < n; j++) {
+      val += dequant_buf[i * n + j] * x[j];
+    }
+    xout[i] = val;
+  }
 }
 
 
@@ -566,18 +605,18 @@ void Block::_block_cpu(
 
   // qkv matmuls for this position
   if (c.q_lora_rank > 0) {
-    matmul(s.q_a(), s.xb(), wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a);
+    matmul(s.q_a(), s.xb(), wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a, s.dqb());
     switch (c.norm_type) {
       case LayerNormType::RMSNorm: {
         rmsnorm(s.q_a(), s.q_a(), rms_q_a_weight(), c.q_lora_rank, c.norm_eps);
         break;
       }
     }
-    matmul(s.q(), s.q_a(), wq_b<T>(), c.q_lora_rank, q_dim, c.block_size.data(), _sq_b);
+    matmul(s.q(), s.q_a(), wq_b<T>(), c.q_lora_rank, q_dim, c.block_size.data(), _sq_b, s.dqb());
   } else {
-    matmul(s.q(), s.xb(), wq<T>(), c.dim, q_dim, c.block_size.data(), _sq);
+    matmul(s.q(), s.xb(), wq<T>(), c.dim, q_dim, c.block_size.data(), _sq, s.dqb());
   }
-  matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a);
+  matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a, s.dqb());
 
   // Apply RoPE positional encoding to the PE chunks of q and kv_a
   int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
@@ -601,7 +640,7 @@ void Block::_block_cpu(
   // un-compress the latent kv via multiplication with wkv_b
   int qk_nope_head_dim = c.head_dim - c.qk_rope_head_dim;
   int uncompressed_kv_dim = c.n_kv_heads * (qk_nope_head_dim + c.v_head_dim);
-  matmul(s.kv_b(), s.kv_a(), wkv_b<T>(), c.kv_lora_rank, uncompressed_kv_dim, c.block_size.data(), _skv_b);
+  matmul(s.kv_b(), s.kv_a(), wkv_b<T>(), c.kv_lora_rank, uncompressed_kv_dim, c.block_size.data(), _skv_b, s.dqb());
   // concatenate kv_b and k_rope in each head to build key heads
   for (int h = 0; h < c.n_heads; h++) {
     for (int i = 0; i < qk_nope_head_dim; i++) {
@@ -661,7 +700,7 @@ void Block::_block_cpu(
   }
 
   // final matmul to get output of the attention, using `hb` as temp storage
-  matmul(s.hb(), s.xb2(), wo<T>(), c.n_kv_heads * c.v_head_dim, c.dim, c.block_size.data(), _so);
+  matmul(s.hb(), s.xb2(), wo<T>(), c.n_kv_heads * c.v_head_dim, c.dim, c.block_size.data(), _so, s.dqb());
 
   // residual connection back into x
   for (int i = 0; i < c.dim; ++i) {
@@ -694,8 +733,8 @@ void Block::_block_cpu(
       size_t scale2_offset = expert_index * expert_scale2_size;
       // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
       // Note this is a feedforward with a GLU, not a simple MLP.
-      matmul(s.hb(), s.xb(), w1<T>() + weight_offset, c.dim, c.moe_intermediate_size, c.block_size.data(), _s1 + scale13_offset);
-      matmul(s.hb2(), s.xb(), w3<T>() + weight_offset, c.dim, c.moe_intermediate_size, c.block_size.data(), _s3 + scale13_offset);
+      matmul(s.hb(), s.xb(), w1<T>() + weight_offset, c.dim, c.moe_intermediate_size, c.block_size.data(), _s1 + scale13_offset, s.dqb());
+      matmul(s.hb2(), s.xb(), w3<T>() + weight_offset, c.dim, c.moe_intermediate_size, c.block_size.data(), _s3 + scale13_offset, s.dqb());
       switch (c.act) {
         case ActivationType::GELU: {
           for (int i = 0; i < c.moe_intermediate_size; ++i) {
@@ -710,7 +749,7 @@ void Block::_block_cpu(
           break;
         }
       }
-      matmul(s.xb2(), s.hb(), w2<T>() + weight_offset, c.moe_intermediate_size, c.dim, c.block_size.data(), _s2 + scale2_offset);
+      matmul(s.xb2(), s.hb(), w2<T>() + weight_offset, c.moe_intermediate_size, c.dim, c.block_size.data(), _s2 + scale2_offset, s.dqb());
       float expert_weight = s.active_experts_weights()[k];
       for (int i = 0; i < c.dim; ++i) {
         s.x()[i] += s.xb2()[i] * expert_weight;
@@ -719,8 +758,8 @@ void Block::_block_cpu(
     if (c.n_shared_experts > 0) {
       // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
       // Note this is a feedforward with a GLU, not a simple MLP.
-      matmul(s.hb(), s.xb(), shared_w1<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size, c.block_size.data(), _shared_s1);
-      matmul(s.hb2(), s.xb(), shared_w3<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size, c.block_size.data(), _shared_s3);
+      matmul(s.hb(), s.xb(), shared_w1<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size, c.block_size.data(), _shared_s1, s.dqb());
+      matmul(s.hb2(), s.xb(), shared_w3<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size, c.block_size.data(), _shared_s3, s.dqb());
       switch (c.act) {
         case ActivationType::GELU: {
           for (int i = 0; i < c.n_shared_experts * c.moe_intermediate_size; ++i) {
@@ -736,7 +775,7 @@ void Block::_block_cpu(
         }
       }
 
-      matmul(s.xb2(), s.hb(), shared_w2<T>(), c.n_shared_experts * c.moe_intermediate_size, c.dim, c.block_size.data(), _shared_s2);
+      matmul(s.xb2(), s.hb(), shared_w2<T>(), c.n_shared_experts * c.moe_intermediate_size, c.dim, c.block_size.data(), _shared_s2, s.dqb());
       // residual connection back into x
       for (int i = 0; i < c.dim; ++i) {
         s.x()[i] += s.xb2()[i];
@@ -746,8 +785,8 @@ void Block::_block_cpu(
     // Block is a dense FFN layer
     // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
     // Note this is a feedforward with a GLU, not a simple MLP.
-    matmul(s.hb(), s.xb(), w1<T>(), c.dim, c.hidden_dim, c.block_size.data(), _s1);
-    matmul(s.hb2(), s.xb(), w3<T>(), c.dim, c.hidden_dim, c.block_size.data(), _s3);
+    matmul(s.hb(), s.xb(), w1<T>(), c.dim, c.hidden_dim, c.block_size.data(), _s1, s.dqb());
+    matmul(s.hb2(), s.xb(), w3<T>(), c.dim, c.hidden_dim, c.block_size.data(), _s3, s.dqb());
     switch (c.act) {
       case ActivationType::GELU: {
         for (int i = 0; i < c.hidden_dim; ++i) {
@@ -762,7 +801,7 @@ void Block::_block_cpu(
         break;
       }
     }
-    matmul(s.xb2(), s.hb(), w2<T>(), c.hidden_dim, c.dim, c.block_size.data(), _s2);
+    matmul(s.xb2(), s.hb(), w2<T>(), c.hidden_dim, c.dim, c.block_size.data(), _s2, s.dqb());
     // residual connection back into x
     for (int i = 0; i < c.dim; ++i) {
       s.x()[i] += s.xb2()[i];
@@ -795,13 +834,13 @@ void mha_cpu(
 }
 
 void matmul_unscaled(float* xout, float* x, float* w, int n, int d) {
-  matmul(xout, x, w, n, d, nullptr, nullptr);
+  matmul(xout, x, w, n, d, nullptr, nullptr, nullptr);
 }
 void matmul_unscaled(float* xout, float* x, f16_t* w, int n, int d) {
-  matmul(xout, x, w, n, d, nullptr, nullptr);
+  matmul(xout, x, w, n, d, nullptr, nullptr, nullptr);
 }
 void matmul_unscaled(float* xout, float* x, f8e5m2_t* w, int n, int d) {
-  matmul(xout, x, w, n, d, nullptr, nullptr);
+  matmul(xout, x, w, n, d, nullptr, nullptr, nullptr);
 }
 
 void ffn_cpu(
@@ -840,6 +879,7 @@ void ffn_cpu(
 template void Block::_block_cpu<float>(InferenceState&, int, int, int, int) const;
 template void Block::_block_cpu<f16_t>(InferenceState&, int, int, int, int) const;
 template void Block::_block_cpu<f8e5m2_t>(InferenceState&, int, int, int, int) const;
+template void Block::_block_cpu<block_q2_K>(InferenceState&, int, int, int, int) const;
 
 void Model::_copy_embedding(InferenceState& s, int token) {
   const Config& c = *config;
@@ -868,6 +908,12 @@ void Model::_copy_embedding(InferenceState& s, int token) {
         float scale = token_embedding_scale[scale_i * scale_num_cols + scale_j];
         s.x()[i] = float8e5m2_to_float(emb[token * c.dim + i]) * scale;
       }
+      break;
+    }
+    case Quant::Q2_K: {
+      block_q2_K* emb = static_cast<block_q2_K*>(token_embedding_table);
+      int blocks_per_row = c.dim / QK_K;
+      dequantize_row_q2_K(emb + token * blocks_per_row, s.x(), c.dim);
       break;
     }
     default: {
@@ -918,7 +964,11 @@ void Model::_forward_cpu(InferenceState& s, int token, int pos, InferenceMode mo
       break;
     }
     case Quant::F8E5M2: {
-      matmul(s.logits(), s.x(), static_cast<f8e5m2_t*>(wcls), c.dim, c.vocab_size, c.block_size.data(), scls);
+      matmul(s.logits(), s.x(), static_cast<f8e5m2_t*>(wcls), c.dim, c.vocab_size, c.block_size.data(), scls, s.dqb());
+      break;
+    }
+    case Quant::Q2_K: {
+      matmul(s.logits(), s.x(), static_cast<block_q2_K*>(wcls), c.dim, c.vocab_size, c.block_size.data(), scls, s.dqb());
       break;
     }
     default: {

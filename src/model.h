@@ -121,6 +121,8 @@ struct InferenceState {
   int* active_experts() const { return _active_experts; }
   // LM head
   float* logits() const { return _logits; }
+  // weight dequantization buffer
+  float* dqb() const { return _dqb; }
 
   Device device() const { return _device; }
   InferenceMode mode() const { return _mode; }
@@ -152,6 +154,9 @@ private:
   
   // LM head
   float* _logits = nullptr;    // (vocab_size,) - final output logits
+
+  // weight dequantization buffer
+  float* _dqb = nullptr; // (max{w.numel() for all w in weights}) - buffer for dequantized weights
 };
 
 /* Transformer Block */

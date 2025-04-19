@@ -102,8 +102,9 @@ void Config::from_yalm(YALMData& yalm, int context) {
     weight_quant = Quant::F16;
   } else if (quant == "f8e5m2") {
     weight_quant = Quant::F8E5M2;
+  } else if (quant == "q2k") {
+    weight_quant = Quant::Q2_K;
   } else {
-    // TODO: support Q2_K
     std::cerr << "FATAL: unsupported quant: " << quant << std::endl;
     assert(false);
   }
@@ -256,7 +257,8 @@ Block::Block(
   switch (config->weight_quant) {
     case Quant::F32:
     case Quant::F16:
-    case Quant::F8E5M2: {
+    case Quant::F8E5M2:
+    case Quant::Q2_K: {
       break;
     }
     default: {
@@ -469,6 +471,10 @@ void Block::block(
         _block_cpu<f8e5m2_t>(s, pos, kv_sink, kv_pos, kv_len);
         break;
       }
+      case Quant::Q2_K: {
+        _block_cpu<block_q2_K>(s, pos, kv_sink, kv_pos, kv_len);
+        break;
+      }
       default: {
         assert(false && "unsupported weight quantization for cpu");
       }
@@ -500,6 +506,7 @@ InferenceState::InferenceState(const std::shared_ptr<Config> config):
     _active_experts = new int[config->n_active_routed]();
     _active_experts_weights = new float[config->n_active_routed]();
   }
+  _dqb = new float[config->dim * config->vocab_size]();
 }
 
 InferenceState::~InferenceState() {
@@ -525,6 +532,7 @@ InferenceState::~InferenceState() {
       delete[] _active_experts;
       delete[] _active_experts_weights;
     }
+    delete[] _dqb;
   }
 }
 
