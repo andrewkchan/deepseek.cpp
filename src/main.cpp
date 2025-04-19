@@ -11,7 +11,7 @@
 #include "codec.h"
 #include "model.h"
 #include "sampler.h"
-#include "time.h"
+#include "time_utils.h"
 #include "tokenizer.h"
 
 void error_usage() {
