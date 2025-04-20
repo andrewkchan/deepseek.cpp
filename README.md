@@ -10,13 +10,13 @@ Folks who want DeepSeek support on low-end CPU-only devices may also find this u
 
 ## Model support
 
-| Model      | INT4 | F8E5M2 | F8E4M3 | FP16 | BF16 | FP32 |
-| -----      | ---- | ------ | ------ | ---- | ---- | ---- |
-| DeepSeek-V2-Lite | WIP | ✅ | WIP | ✅ | WIP | ✅ |
-| DeepSeek-V2 | WIP | ✅ | WIP | ✅ | WIP | ✅ |
-| DeepSeek-V2.5 | WIP | ✅ | WIP | ✅ | WIP | ✅ |
-| DeepSeek-V3 | WIP | ✅ | WIP | - | - | - |
-| DeepSeek-R1 | WIP | ✅ | WIP | - | - | - |
+| Model      | Q2_K | Q4_K | F8E5M2 | F8E4M3 | FP16 | BF16 | FP32 |
+| -----      | ---- | ---- | ------ | ------ | ---- | ---- | ---- |
+| DeepSeek-V2-Lite | ✅ | WIP | ✅ | WIP | ✅ | WIP | ✅ |
+| DeepSeek-V2 | ✅ | WIP | ✅ | WIP | ✅ | WIP | ✅ |
+| DeepSeek-V2.5 | ✅ | WIP | ✅ | WIP | ✅ | WIP | ✅ |
+| DeepSeek-V3 | ✅ | WIP | ✅ | WIP | - | - | - |
+| DeepSeek-R1 | ✅ | WIP | ✅ | WIP | - | - | - |
 
 # Instructions
 
@@ -69,5 +69,5 @@ Passkey mode options:
 - If `f8e5m2` is specified as the conversion datatype, model weights will be quantized using 128x128 blockwise quantization. MoE gates and layer norms are left in full precision. This should provide better accuracy than per-tensor quantization or the naive truncating quantization done by `yalm` (which results in nonsensical output for the DeepSeek family of models).
 - The models have a tendency to repeat themselves and get into infinite loops at lower temperatures. In my testing, a temperature of ~1.0 avoids this failure mode but also keeps the models reasonably grounded.
 - Some new, optional architectural features (e.g. the `noaux_tc` method of expert selection) of DeepSeek V3 have not yet been implemented, so the model accuracy may be lower than the reference model.
-- You will need ~650GB of memory to run DeepSeek V3 in F8E5M2. For best performance, this should be physical RAM, but most operating systems will also automatically supplement this with swap space (storing some memory on disk and some in RAM) at the cost of severely degraded token throughput. More aggressive quantization methods such as INT4 or [1.58-bit](https://unsloth.ai/blog/deepseekr1-dynamic) are planned, which should lower the memory footprint considerably.
+- You will need ~650GB of memory to run DeepSeek V3 in F8E5M2, or 206GB for 2-bit Q2_K. For best performance, this should be physical RAM, but most operating systems will also automatically supplement this with swap space (storing some memory on disk and some in RAM) at the cost of severely degraded token throughput. More aggressive quantization methods such as [1.58-bit](https://unsloth.ai/blog/deepseekr1-dynamic) are planned.
 - Only decoding (e.g. incremental, iterative generation or reading of one token at a time) has been implemented. Prefills (reading a batch of prompt tokens in a single pass) have not been implemented, nor prefill-based optimizations for the decoding phase such as speculative decoding or multi-token prediction. Finally, multi-latent attention is implemented in the naive way as described in the DeepSeek-V2 paper rather than the optimized way. I have limited time to implement these optimizations as this is a side project for me, but PRs are welcome!
