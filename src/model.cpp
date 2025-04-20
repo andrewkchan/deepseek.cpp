@@ -182,8 +182,7 @@ void* check_tensor(const Tensor* tensor, Quant weight_quant, std::array<int, 4> 
           tensor->size
         ) << std::endl;
     }
-  }
-  if (tensor->dtype != expected_dtype || tensor->shape != expected_shape) {
+  } else if (tensor->dtype != expected_dtype || tensor->shape != expected_shape) {
     std::cerr << "FATAL: tensor mismatch for " << tensor->name << std::endl;
     std::cerr 
       << fmt::format(
