@@ -66,7 +66,8 @@ Passkey mode options:
 
 ## Notes
 
-- If `f8e5m2` is specified as the conversion datatype, model weights will be quantized using 128x128 blockwise quantization. MoE gates and layer norms are left in full precision. This should provide better accuracy than per-tensor quantization or the naive truncating quantization done by `yalm` (which results in nonsensical output for the DeepSeek family of models).
+- `--quant=f8e5m2` specifies model weight quantization using 128x128 blocks. MoE gates and layer norms are left in full precision. This should provide better accuracy than per-tensor quantization or the naive truncating quantization done by `yalm` (which results in nonsensical output for the DeepSeek family of models).
+- `--quant=q2_k` specifies model weight quantization using the 2-bit llama.cpp [K-quantization scheme](https://github.com/ggml-org/llama.cpp/pull/1684), which uses a two-level hierarchy of blocks and super-blocks to store scales and biases for ranges of weights.
 - The models have a tendency to repeat themselves and get into infinite loops at lower temperatures. In my testing, a temperature of ~1.0 avoids this failure mode but also keeps the models reasonably grounded.
 - Some new, optional architectural features (e.g. the `noaux_tc` method of expert selection) of DeepSeek V3 have not yet been implemented, so the model accuracy may be lower than the reference model.
 - You will need ~650GB of memory to run DeepSeek V3 in F8E5M2, or 206GB for 2-bit Q2_K. For best performance, this should be physical RAM, but most operating systems will also automatically supplement this with swap space (storing some memory on disk and some in RAM) at the cost of severely degraded token throughput. More aggressive quantization methods such as [1.58-bit](https://unsloth.ai/blog/deepseekr1-dynamic) are planned.
