@@ -1,3 +1,10 @@
 [build-system]
 requires = ["setuptools>=42", "wheel", "torch>=2.0.0", "ninja", "numpy"]
 build-backend = "setuptools.build_meta" 
+[project]
+dependencies = [
+    "safetensors",
+    "torch>=2.0.0",
+    "ninja",
+    "numpy"
+]
