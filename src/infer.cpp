@@ -729,6 +729,10 @@ void Block::_block_cpu(
       int expert_scale13_size = _s1 ? cdiv(c.moe_intermediate_size, c.block_size[0]) * cdiv(c.dim, c.block_size[1]) : 0;
       int expert_scale2_size = _s2 ? cdiv(c.dim, c.block_size[0]) * cdiv(c.moe_intermediate_size, c.block_size[1]) : 0;
       size_t weight_offset = expert_index * expert_size;
+      if (c.weight_quant == Quant::Q2_K) {
+        // In Q2_K, each element of the weight tensor is a block of QK_K elements
+        weight_offset = weight_offset / QK_K;
+      }
       size_t scale13_offset = expert_index * expert_scale13_size;
       size_t scale2_offset = expert_index * expert_scale2_size;
       // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
