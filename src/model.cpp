@@ -102,7 +102,7 @@ void Config::from_yalm(YALMData& yalm, int context) {
     weight_quant = Quant::F16;
   } else if (quant == "f8e5m2") {
     weight_quant = Quant::F8E5M2;
-  } else if (quant == "q2k") {
+  } else if (quant == "q2_k") {
     weight_quant = Quant::Q2_K;
   } else {
     std::cerr << "FATAL: unsupported quant: " << quant << std::endl;
