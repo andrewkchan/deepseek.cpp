@@ -41,7 +41,7 @@ double bits_per_weight(Quant quant, size_t blockwise_quant_size) {
     case Quant::F32: return 4;
     case Quant::F16: return 2;
     case Quant::F8E5M2: return (4 + blockwise_quant_size) / blockwise_quant_size;
-    case Quant::Q2_K: return 2.625;
+    case Quant::Q2_K: return 2.5625;
   }
   __builtin_unreachable();
 }
