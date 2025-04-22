@@ -64,6 +64,13 @@ Passkey mode options:
   -l <int>    passkey position (-1 - random)
 ```
 
+You will likely need to tune the number of OpenMP threads to achieve good performance. For example: 
+```
+OMP_NUM_THREADS=32 ./build/main <...args>
+```
+
+The default OpenMP thread count can result in severely degraded throughput, likely due to thread contention. I have found a good heuristic to be half the number of cores.
+
 ## Notes
 
 - `--quant=f8e5m2` specifies model weight quantization using 128x128 blocks. MoE gates and layer norms are left in full precision. This should provide better accuracy than per-tensor quantization or the naive truncating quantization done by `yalm` (which results in nonsensical output for the DeepSeek family of models).
