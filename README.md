@@ -6,7 +6,7 @@ For fun and learning!
 
 I was initially adding DeepSeek support to `yalm` but realized that the changes were large and complex enough that it might ruin the simplicity of that project. Maybe at some point I'll upstream the changes, but for now I've decided to fork them into a separate, smaller, leaner codebase. 
 
-Folks who want DeepSeek support on low-end CPU-only devices may also find this useful, especially since this program doesn't require a Python runtime and is tiny compared to other inference engines (<2k LOC not including `fmt` and `json`, vs. >250k for llama.cpp and vllm).
+Since this program only supports DeepSeek, it's tiny compared to other inference engines (<2k LOC not including `fmt` and `json`, vs. >250k for llama.cpp and vllm) and is extra hackable. I'm currently using it as a testbed to study single-batch DeepSeek decoding performance on CPU.
 
 ## Model support
 
