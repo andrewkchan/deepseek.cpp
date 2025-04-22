@@ -1,6 +1,10 @@
+env/
+
 # build intermediates
 .vscode/
 build/
+__pycache__/
+*.egg-info/
 
 # profiling tools
 *.sqlite
