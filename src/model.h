@@ -6,6 +6,8 @@
 #include <vector>
 #include <map>
 
+#include "quant.h"
+
 #define DEBUG_MODEL 0
 
 constexpr int KV_SINKS = 2;
@@ -121,8 +123,8 @@ struct InferenceState {
   int* active_experts() const { return _active_experts; }
   // LM head
   float* logits() const { return _logits; }
-  // weight dequantization buffer
-  float* dqb() const { return _dqb; }
+  // activation quantization buffer
+  void* aqb() const { return _aqb; }
 
   Device device() const { return _device; }
   InferenceMode mode() const { return _mode; }
@@ -155,8 +157,8 @@ private:
   // LM head
   float* _logits = nullptr;    // (vocab_size,) - final output logits
 
-  // weight dequantization buffer
-  float* _dqb = nullptr; // (max{w.numel() for all w in weights}) - buffer for dequantized weights
+  // activation quantization buffer
+  uint8_t* _aqb = nullptr; // buffer for quantized activations
 };
 
 /* Transformer Block */

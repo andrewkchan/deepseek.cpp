@@ -505,7 +505,14 @@ InferenceState::InferenceState(const std::shared_ptr<Config> config):
     _active_experts = new int[config->n_active_routed]();
     _active_experts_weights = new float[config->n_active_routed]();
   }
-  _dqb = new float[config->dim * config->vocab_size]();
+  size_t aqb_nitems = std::max({
+    config->dim,
+    config->moe_intermediate_size,
+    config->n_kv_heads * config->v_head_dim,
+    config->hidden_dim
+  });
+  size_t aqb_nblocks = aqb_nitems / QK_K;
+  _aqb = new uint8_t[aqb_nblocks * sizeof(block_q8_K)]();
 }
 
 InferenceState::~InferenceState() {
@@ -531,7 +538,7 @@ InferenceState::~InferenceState() {
       delete[] _active_experts;
       delete[] _active_experts_weights;
     }
-    delete[] _dqb;
+    delete[] _aqb;
   }
 }
 
