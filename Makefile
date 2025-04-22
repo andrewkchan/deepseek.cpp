@@ -26,14 +26,25 @@ TEST_ASM_FILES=$(patsubst %.cpp,$(ASM_DIR)/%.s,$(filter %.cpp,$(TEST_SOURCES)))
 
 BINARY=$(BUILD)/main
 TEST_BINARY=$(BUILD)/test
+PROFILE_BINARY=$(BUILD)/main_profile
 
-CFLAGS=-g -Wall -Wpointer-arith -Werror -O3 -ffast-math -Ivendor -std=c++20
-LDFLAGS=-lm
+BASE_CFLAGS=-g -Wall -Wpointer-arith -Werror -O3 -ffast-math -Ivendor -std=c++20
+BASE_LDFLAGS=-lm
 
-CFLAGS+=-fopenmp -mf16c -mavx2 -mfma
-LDFLAGS+=-fopenmp
+BASE_CFLAGS+=-fopenmp -mf16c -mavx2 -mfma
+BASE_LDFLAGS+=-fopenmp
+
+PROFILE_CFLAGS=$(BASE_CFLAGS) -pg -fno-omit-frame-pointer
+PROFILE_LDFLAGS=$(BASE_LDFLAGS) -pg
+
+CFLAGS=$(BASE_CFLAGS)
+LDFLAGS=$(BASE_LDFLAGS)
 
 all: $(BINARY) asm
+
+profile: CFLAGS=$(PROFILE_CFLAGS)
+profile: LDFLAGS=$(PROFILE_LDFLAGS)
+profile: $(PROFILE_BINARY)
 
 test: $(TEST_BINARY) test-asm
 
@@ -50,6 +61,9 @@ $(BINARY): $(OBJECTS)
 
 $(TEST_BINARY): $(TEST_OBJECTS)
 	$(CXX) $^ $(LDFLAGS) -o $@
+
+$(PROFILE_BINARY): $(OBJECTS)
+	$(CXX) $^ $(PROFILE_LDFLAGS) -o $@
 
 # Rule to generate assembly for cpp files
 $(ASM_DIR)/%.s: %.cpp
@@ -74,4 +88,4 @@ $(BUILD)/%.cc.o: %.cc
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all clean format test asm test-asm
+.PHONY: all clean format test asm test-asm profile
