@@ -320,8 +320,6 @@ struct Model {
 
 private:
   void _forward_cpu(InferenceState& s, int token, int pos, InferenceMode mode);
-  void _forward_cuda(InferenceState& s, int token, int pos, InferenceMode mode);
-  void _forward_cuda_build_graph(InferenceState& s, int token, int pos, InferenceMode mode);
   void _copy_embedding(InferenceState& s, int token);
 
   Device _device = Device::CPU;
