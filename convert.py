@@ -18,8 +18,6 @@ from typing import Tuple, List, Literal
 import dataclasses
 
 SUPPORTED_ARCHITECTURES = [
-  # TODO: Llama (deepseek 1)?
-  # TODO: DeepseekForCausalLM
   "DeepseekV2ForCausalLM",
   "DeepseekV3ForCausalLM",
 ]
@@ -45,11 +43,12 @@ SUPPORTED_QUANTS = {
 }
 
 class Metadata:
-  def __init__(self, config, quant, n_layers):
+  def __init__(self, config, quant, n_layers, use_mla):
     arch = config["architectures"][0]
     if arch not in SUPPORTED_ARCHITECTURES:
       raise Exception(f"Architecture {arch} is not supported, must be one of {SUPPORTED_ARCHITECTURES}")
     self.arch = arch
+    self.use_mla = bool(use_mla)
     if quant not in SUPPORTED_QUANTS:
       raise Exception(f"Quantization {quant} is not supported, must be one of {SUPPORTED_QUANTS}")
     self.quant: Quant = SUPPORTED_QUANTS[quant]
@@ -107,6 +106,7 @@ class Metadata:
   def to_dict(self):
     result = {}
     result["arch"] = self.arch
+    result["use_mla"] = str(self.use_mla)
     result["quant"] = self.quant.name
     if self.arch in ["DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM"]:
       result["dim"] = str(self.dim)
@@ -299,14 +299,14 @@ def load_weights(model_files: List[str], metadata: Metadata, tie_word_embeddings
     dequant_block_size = torch.tensor(metadata.original_quantization_config["weight_block_size"])
   tensors = {}
 
-  def conv(weight_name: str, scale_name: str) -> Tuple[torch.Tensor, torch.Tensor]:
-    nonlocal progress
-    progress += 1
+  def load_and_dequantize(weight_name: str, scale_name: str) -> torch.Tensor:
     t = weights[weight_name]
     if scale_name in weights:
       scale = weights[scale_name]
       t = blockwise_dequantize(t, scale, dequant_block_size)
-    print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
+    return t
+  
+  def quantize(t: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     if dtype not in [torch.float32, torch.float16]:
       if isinstance(metadata.quant, KQuant):
         t = k_quantize(t.to(torch.float32), metadata.quant.name)
@@ -316,6 +316,13 @@ def load_weights(model_files: List[str], metadata: Metadata, tie_word_embeddings
         quant_block_size = torch.tensor(metadata.quant.block_size)
         return blockwise_quantize(t, quant_block_size, dtype)
     return t.to(dtype), None
+
+  def conv(weight_name: str, scale_name: str) -> Tuple[torch.Tensor, torch.Tensor]:
+    nonlocal progress
+    progress += 1
+    t = load_and_dequantize(weight_name, scale_name)
+    print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
+    return quantize(t)
   
   def conv_experts(weight_and_scale_names: List[Tuple[str, str]]) -> Tuple[torch.Tensor, torch.Tensor]:
     nonlocal progress
@@ -357,33 +364,92 @@ def load_weights(model_files: List[str], metadata: Metadata, tie_word_embeddings
     tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
     tensors[f"model.layers.{l}.attn.kv_a_norm.weight"] = weights[f"model.layers.{l}.self_attn.kv_a_layernorm.weight"].float()
 
-    save_weight_and_scale(
-      f"model.layers.{l}.attn.wkv_a.weight", f"model.layers.{l}.attn.wkv_a.scale", 
-      conv(f"model.layers.{l}.self_attn.kv_a_proj_with_mqa.weight", f"model.layers.{l}.self_attn.kv_a_proj_with_mqa.weight_scale_inv")
-    )
-    save_weight_and_scale(
-      f"model.layers.{l}.attn.wkv_b.weight", f"model.layers.{l}.attn.wkv_b.scale", 
-      conv(f"model.layers.{l}.self_attn.kv_b_proj.weight", f"model.layers.{l}.self_attn.kv_b_proj.weight_scale_inv")
-    )
-    save_weight_and_scale(
-      f"model.layers.{l}.attn.wo.weight", f"model.layers.{l}.attn.wo.scale", 
-      conv(f"model.layers.{l}.self_attn.o_proj.weight", f"model.layers.{l}.self_attn.o_proj.weight_scale_inv")
-    )
-    if metadata.q_lora_rank > 0:
+    if metadata.use_mla:
+      assert metadata.q_lora_rank > 0
+      assert metadata.n_heads == metadata.n_kv_heads
+      save_weight_and_scale(
+        f"model.layers.{l}.attn.wkv_a.weight", f"model.layers.{l}.attn.wkv_a.scale", 
+        conv(f"model.layers.{l}.self_attn.kv_a_proj_with_mqa.weight", f"model.layers.{l}.self_attn.kv_a_proj_with_mqa.weight_scale_inv")
+      )
       save_weight_and_scale(
         f"model.layers.{l}.attn.wq_a.weight", f"model.layers.{l}.attn.wq_a.scale", 
         conv(f"model.layers.{l}.self_attn.q_a_proj.weight", f"model.layers.{l}.self_attn.q_a_proj.weight_scale_inv")
       )
-      save_weight_and_scale(
-        f"model.layers.{l}.attn.wq_b.weight", f"model.layers.{l}.attn.wq_b.scale", 
-        conv(f"model.layers.{l}.self_attn.q_b_proj.weight", f"model.layers.{l}.self_attn.q_b_proj.weight_scale_inv")
-      )
       tensors[f"model.layers.{l}.attn.q_a_norm.weight"] = weights[f"model.layers.{l}.self_attn.q_a_layernorm.weight"].float()
+      # (n_heads, head_dim-qk_rope_head_dim+v_head_dim, kv_lora_rank)
+      kv_b_proj = load_and_dequantize(
+        f"model.layers.{l}.self_attn.kv_b_proj.weight", f"model.layers.{l}.self_attn.kv_b_proj.weight_scale_inv"
+      ).reshape(
+        metadata.n_kv_heads, -1, metadata.kv_lora_rank
+      )
+      # (n_heads, head_dim, q_lora_rank)
+      q_b_proj = load_and_dequantize(
+        f"model.layers.{l}.self_attn.q_b_proj.weight", f"model.layers.{l}.self_attn.q_b_proj.weight_scale_inv"
+      ).reshape(
+        metadata.n_heads, -1, metadata.q_lora_rank
+      )
+      # (n_heads, head_dim-qk_rope_head_dim, kv_lora_rank)
+      k_nope_b_proj = kv_b_proj[:, :metadata.head_dim-metadata.qk_rope_head_dim]
+      # (n_heads, v_head_dim, kv_lora_rank)
+      v_b_proj = kv_b_proj[:, metadata.head_dim-metadata.qk_rope_head_dim:]
+      # (n_heads, head_dim-qk_rope_head_dim, q_lora_rank)
+      q_nope_b_proj = q_b_proj[:, :metadata.head_dim-metadata.qk_rope_head_dim]
+      # (n_heads, qk_rope_head_dim, q_lora_rank)
+      q_rope_b_proj = q_b_proj[:, metadata.head_dim-metadata.qk_rope_head_dim:]
+      # (n_heads, kv_lora_rank, q_lora_rank)
+      c_proj = torch.bmm(k_nope_b_proj.transpose(1, 2), q_nope_b_proj)
+      
+      # NOTE: k_rope gets split from kv_a, so there is no k_rope_b_proj
+      save_weight_and_scale(
+        f"model.layers.{l}.attn.wq_rope_b.weight", f"model.layers.{l}.attn.wq_rope_b.scale", 
+        quantize(q_rope_b_proj)
+      )
+      save_weight_and_scale(
+        f"model.layers.{l}.attn.wc.weight", f"model.layers.{l}.attn.wc.scale", 
+        quantize(c_proj)
+      )
+      
+      # (dim, n_heads, v_head_dim)
+      o_proj = load_and_dequantize(
+        f"model.layers.{l}.self_attn.o_proj.weight", f"model.layers.{l}.self_attn.o_proj.weight_scale_inv"
+      ).reshape(metadata.dim, metadata.n_heads, metadata.v_head_dim)
+      # (dim, n_heads * kv_lora_rank)
+      ov_proj = torch.bmm(
+        o_proj.transpose(0, 1), # (n_heads, dim, v_head_dim)
+        v_b_proj # (n_heads, v_head_dim, kv_lora_rank)
+      ).reshape(metadata.dim, metadata.n_heads * metadata.kv_lora_rank)
+      save_weight_and_scale(
+        f"model.layers.{l}.attn.wov.weight", f"model.layers.{l}.attn.wov.scale", 
+        quantize(ov_proj)
+      )
     else:
       save_weight_and_scale(
-        f"model.layers.{l}.attn.wq.weight", f"model.layers.{l}.attn.wq.scale", 
-        conv(f"model.layers.{l}.self_attn.q_proj.weight", f"model.layers.{l}.self_attn.q_proj.weight_scale_inv")
+        f"model.layers.{l}.attn.wkv_a.weight", f"model.layers.{l}.attn.wkv_a.scale", 
+        conv(f"model.layers.{l}.self_attn.kv_a_proj_with_mqa.weight", f"model.layers.{l}.self_attn.kv_a_proj_with_mqa.weight_scale_inv")
       )
+      save_weight_and_scale(
+        f"model.layers.{l}.attn.wkv_b.weight", f"model.layers.{l}.attn.wkv_b.scale", 
+        conv(f"model.layers.{l}.self_attn.kv_b_proj.weight", f"model.layers.{l}.self_attn.kv_b_proj.weight_scale_inv")
+      )
+      save_weight_and_scale(
+        f"model.layers.{l}.attn.wo.weight", f"model.layers.{l}.attn.wo.scale", 
+        conv(f"model.layers.{l}.self_attn.o_proj.weight", f"model.layers.{l}.self_attn.o_proj.weight_scale_inv")
+      )
+      if metadata.q_lora_rank > 0:
+        save_weight_and_scale(
+          f"model.layers.{l}.attn.wq_a.weight", f"model.layers.{l}.attn.wq_a.scale", 
+          conv(f"model.layers.{l}.self_attn.q_a_proj.weight", f"model.layers.{l}.self_attn.q_a_proj.weight_scale_inv")
+        )
+        save_weight_and_scale(
+          f"model.layers.{l}.attn.wq_b.weight", f"model.layers.{l}.attn.wq_b.scale", 
+          conv(f"model.layers.{l}.self_attn.q_b_proj.weight", f"model.layers.{l}.self_attn.q_b_proj.weight_scale_inv")
+        )
+        tensors[f"model.layers.{l}.attn.q_a_norm.weight"] = weights[f"model.layers.{l}.self_attn.q_a_layernorm.weight"].float()
+      else:
+        save_weight_and_scale(
+          f"model.layers.{l}.attn.wq.weight", f"model.layers.{l}.attn.wq.scale", 
+          conv(f"model.layers.{l}.self_attn.q_proj.weight", f"model.layers.{l}.self_attn.q_proj.weight_scale_inv")
+        )
 
     tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
 
@@ -456,6 +522,7 @@ if __name__ == "__main__":
   argp = argparse.ArgumentParser()
   argp.add_argument("output_dir", type=str)
   argp.add_argument("input", type=str, nargs="?")
+  argp.add_argument("--mla", action="store_true")
   argp.add_argument("--quant", type=str, default="fp16", choices=SUPPORTED_QUANTS)
   argp.add_argument("--n-layers", type=int, default=None, help="number of layers to convert (if None, convert all)")
   args = argp.parse_args()
@@ -486,7 +553,7 @@ if __name__ == "__main__":
 
   with open(args.config, "r") as f:
     config = json.load(f)
-    metadata = Metadata(config, args.quant, args.n_layers)
+    metadata = Metadata(config, args.quant, args.n_layers, args.mla)
 
   tokens = load_tokens(args.tokenizer, metadata.vocab_size)
   
