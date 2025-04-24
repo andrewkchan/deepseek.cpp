@@ -69,6 +69,7 @@ struct Config {
   TopKMethod topk_method;
   bool has_moegate_bias;
   // multi-latent attention
+  bool use_mla; // if false, use naive implementation of multi-latent attention
   int kv_lora_rank;
   int q_lora_rank;
   int qk_nope_head_dim;
@@ -117,6 +118,11 @@ struct InferenceState {
   float* v(int head) const { return _v + _config->v_head_dim * head; }
   float* att() const { return _att; }
   float* att(int head) const { return _att + _config->max_seq_len * head; }
+  // MLA only
+  float* q_c() const { return _q_c; }
+  float* q_c(int head) const { return _q_c + _config->kv_lora_rank * head; }
+  float* q_rope() const { return _q_rope; }
+  float* q_rope(int head) const { return _q_rope + _config->qk_rope_head_dim * head; }
   // mixture of experts
   float* moe_weights() const { return _moe_weights; }
   float* active_experts_weights() const { return _active_experts_weights; }
@@ -149,6 +155,9 @@ private:
   float* _k = nullptr;         // (n_kv_heads * head_dim,) - key vectors for latest timestamp
   float* _v = nullptr;         // (n_kv_heads * v_head_dim,) - value vectors for latest timestamp
   float* _att = nullptr;       // (n_heads, seq_len) - buffer for attention scores
+  // MLA only
+  float* _q_c = nullptr;       // (n_heads * kv_lora_rank,) - transformed and compressed query vector for latest timestamp
+  float* _q_rope = nullptr;    // (n_heads * qk_rope_head_dim,) - RoPE-transformed query vector for latest timestamp
   // mixture of experts
   float* _moe_weights = nullptr; // (n_routed_experts,) - buffer for expert weights, decided by router
   float* _active_experts_weights = nullptr; // (n_active_experts,) - buffer for weights of top K experts (active experts)
@@ -174,14 +183,20 @@ struct Block {
     const Tensor* sq,
     const Tensor* wq_a,
     const Tensor* sq_a,
-    const Tensor* wq_b,
-    const Tensor* sq_b,
     const Tensor* wkv_a,
     const Tensor* skv_a,
+    const Tensor* wq_b,
+    const Tensor* sq_b,
     const Tensor* wkv_b,
     const Tensor* skv_b,
     const Tensor* wo,
     const Tensor* so,
+    const Tensor* wc,
+    const Tensor* sc,
+    const Tensor* wq_rope_b,
+    const Tensor* sq_rope_b,
+    const Tensor* wov,
+    const Tensor* sov,
     const Tensor* w1,
     const Tensor* s1,
     const Tensor* w2,
@@ -216,6 +231,12 @@ struct Block {
   template <typename T>
   T* wo() const { return static_cast<T*>(_wo); }
   template <typename T>
+  T* wc() const { return static_cast<T*>(_wc); }
+  template <typename T>
+  T* wq_rope_b() const { return static_cast<T*>(_wq_rope_b); }
+  template <typename T>
+  T* wov() const { return static_cast<T*>(_wov); }
+  template <typename T>
   T* w1() const { return static_cast<T*>(_w1); }
   template <typename T>
   T* w2() const { return static_cast<T*>(_w2); }
@@ -232,6 +253,10 @@ struct Block {
   f16_t* key_cache(int pos) const { return _key_cache + pos * _config->head_dim * _config->n_kv_heads; }
   f16_t* value_cache() const { return _value_cache; }
   f16_t* value_cache(int pos) const { return _value_cache + pos * _config->v_head_dim * _config->n_kv_heads; }
+  f16_t* kv_nope_cache() const { return _kv_nope_cache; }
+  f16_t* kv_nope_cache(int pos) const { return _kv_nope_cache + pos * _config->kv_lora_rank; }
+  f16_t* kv_rope_cache() const { return _kv_rope_cache; }
+  f16_t* kv_rope_cache(int pos) const { return _kv_rope_cache + pos * _config->qk_rope_head_dim; }
 
   // Compute forward pass for this block and update the inference state accordingly.
   // PRECONDITIONS: 
@@ -271,14 +296,22 @@ private:
   float* _sq = nullptr;
   void* _wq_a = nullptr; // (q_lora_rank, dim)
   float* _sq_a = nullptr;
-  void* _wq_b = nullptr; // (n_heads * head_dim, q_lora_rank)
-  float* _sq_b = nullptr;
   void* _wkv_a = nullptr; // (kv_lora_rank + qk_rope_head_dim, dim)
   float* _skv_a = nullptr;
+  // Naive (MHA) only
+  void* _wq_b = nullptr; // (n_heads * head_dim, q_lora_rank)
+  float* _sq_b = nullptr;
   void* _wkv_b = nullptr; // (n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim), kv_lora_rank)
   float* _skv_b = nullptr;
   void* _wo = nullptr; // (dim, n_heads * v_head_dim)
   float* _so = nullptr;
+  // MLA only
+  void* _wc = nullptr; // (n_heads * kv_lora_rank, q_lora_rank)
+  float* _sc = nullptr;
+  void* _wq_rope_b = nullptr; // (n_heads * qk_rope_head_dim, q_lora_rank)
+  float* _sq_rope_b = nullptr;
+  void* _wov = nullptr; // (dim, n_heads * kv_lora_rank)
+  float* _sov = nullptr;
 
   // weights for ffn
   void* _w1 = nullptr; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
@@ -300,6 +333,9 @@ private:
   // kv cache
   f16_t* _key_cache = nullptr;   // (seq_len, n_kv_heads * head_dim)
   f16_t* _value_cache = nullptr; // (seq_len, n_kv_heads * v_head_dim)
+  // MLA only
+  f16_t* _kv_nope_cache = nullptr; // (seq_len, kv_lora_rank)
+  f16_t* _kv_rope_cache = nullptr; // (seq_len, qk_rope_head_dim)
 };
 
 struct Model {

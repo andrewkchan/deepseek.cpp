@@ -85,6 +85,9 @@ class Metadata:
       # multi-latent attention
       self.kv_lora_rank = config["kv_lora_rank"]
       self.q_lora_rank = config["q_lora_rank"] or 0
+      if self.use_mla:
+        # TODO: support MLA with q_lora_rank == 0 (DeepSeek V2 Lite)
+        assert self.q_lora_rank > 0 and self.kv_lora_rank > 0
       self.qk_nope_head_dim = config["qk_nope_head_dim"]
       self.qk_rope_head_dim = config["qk_rope_head_dim"]
       self.v_head_dim = config["v_head_dim"]
@@ -106,7 +109,7 @@ class Metadata:
   def to_dict(self):
     result = {}
     result["arch"] = self.arch
-    result["use_mla"] = str(self.use_mla)
+    result["use_mla"] = str(int(self.use_mla))
     result["quant"] = self.quant.name
     if self.arch in ["DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM"]:
       result["dim"] = str(self.dim)

@@ -584,6 +584,49 @@ void attn(
   }
 }
 
+// Compute next value in a sequence for a single causal self-attention head.
+// MLA variant: uses combined latent-KV cache and PE-KV cache.
+void attn_mla(
+  float* xout,    // (n_heads * kv_lora_rank,) - output vector
+  float* atth,    // (kv_len,) - scratch space to hold attention scores of the sequence
+  float* qh_c,    // (kv_lora_rank,) - transformed latent query vector for this head
+  float* qh_rope, // (qk_rope_head_dim,) - PE-query vector for this head
+  f16_t* kvh,      // (kv_len, kv_lora_rank) - buffer containing latent vectors of the sequence
+  f16_t* kh_rope,  // (kv_len, qk_rope_head_dim) - buffer containing PE key-vectors of the sequence
+  int head_dim, // used for softmax scale factor
+  int kv_lora_rank, // size of the "latent-space"
+  int qk_rope_head_dim, // size of the "PE-space"
+  int n_heads, // number of heads
+  int kv_len   // number of tokens of the sequence we will attend over
+) {
+  int kv_stride = kv_lora_rank; // stride per token in the latent buffer
+  int k_rope_stride = qk_rope_head_dim; // stride per token in the PE buffer
+  // calculate attention scores as dot products of q and k
+  for (int t = 0; t < kv_len; ++t) {
+    float score = 0.0f;
+    for (int i = 0; i < kv_lora_rank; ++i) {
+      score += qh_c[i] * half_to_float(kvh[t * kv_stride + i]);
+    }
+    for (int i = 0; i < qk_rope_head_dim; ++i) {
+      score += qh_rope[i] * half_to_float(kh_rope[t * k_rope_stride + i]);
+    }
+    score /= sqrtf(head_dim);
+    atth[t] = score;
+  }
+
+  // softmax the scores to get attention weights over [0..kv_len)
+  softmax(atth, atth, kv_len);
+
+  // mix latents with attention weights
+  for (int i = 0; i < kv_lora_rank; ++i) {
+    float vi = 0.0f;
+    for (int t = 0; t < kv_len; ++t) {
+      vi += atth[t] * half_to_float(kvh[t * kv_stride + i]);
+    }
+    xout[i] = vi;
+  }
+}
+
 // Compute forward pass for a single block and update the inference state accordingly.
 // PRECONDITIONS: 
 // - `s.x()` contains the input to the block. Output will also go here.
@@ -607,10 +650,9 @@ void Block::_block_cpu(
     }
   }
 
-  int q_dim = c.n_heads * c.head_dim;
-
-  // qkv matmuls for this position
-  if (c.q_lora_rank > 0) {
+  if (c.use_mla) {
+    assert(c.q_lora_rank > 0); // TODO: support MLA with q_lora_rank == 0 (DeepSeek V2 Lite)
+    // qkv down projections for this position
     matmul(s.q_a(), s.xb(), wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a, s.aqb());
     switch (c.norm_type) {
       case LayerNormType::RMSNorm: {
@@ -618,95 +660,166 @@ void Block::_block_cpu(
         break;
       }
     }
-    matmul(s.q(), s.q_a(), wq_b<T>(), c.q_lora_rank, q_dim, c.block_size.data(), _sq_b, s.aqb());
-  } else {
-    matmul(s.q(), s.xb(), wq<T>(), c.dim, q_dim, c.block_size.data(), _sq, s.aqb());
-  }
-  matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a, s.aqb());
-
-  // Apply RoPE positional encoding to the PE chunks of q and kv_a
-  int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
-  bool is_v3 = c.has_moegate_bias;
-  for (int h = 0; h < c.n_heads; h++) {
-    if (is_v3) {
-      rope_v3(s.q(h) + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
-    } else {
-      rope(s.ropebuf(), s.q(h) + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
-    }
-  }
-  int kv_pe_offset = c.kv_lora_rank;
-  float* k_rope = s.kv_a() + kv_pe_offset;
-  if (is_v3) {
-    rope_v3(k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
-  } else {
-    rope(s.ropebuf(), k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
-  }
-  // rms norm to non-pe chunk of kv_a (compressed latent kv)
-  rmsnorm(s.kv_a(), s.kv_a(), rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
-  // un-compress the latent kv via multiplication with wkv_b
-  int qk_nope_head_dim = c.head_dim - c.qk_rope_head_dim;
-  int uncompressed_kv_dim = c.n_kv_heads * (qk_nope_head_dim + c.v_head_dim);
-  matmul(s.kv_b(), s.kv_a(), wkv_b<T>(), c.kv_lora_rank, uncompressed_kv_dim, c.block_size.data(), _skv_b, s.aqb());
-  // concatenate kv_b and k_rope in each head to build key heads
-  for (int h = 0; h < c.n_heads; h++) {
-    for (int i = 0; i < qk_nope_head_dim; i++) {
-      s.k(h)[i] = s.kv_b(h)[i];
-    }
-    for (int i = 0; i < c.qk_rope_head_dim; i++) {
-      s.k(h)[qk_nope_head_dim + i] = k_rope[i];
-    }
-  }
-  // transfer value heads from kv_b
-  for (int h = 0; h < c.n_heads; h++) {
-    for (int i = 0; i < c.v_head_dim; i++) {
-      s.v(h)[i] = s.kv_b(h)[qk_nope_head_dim + i];
-    }
-  }
-
-  // update kv cache
-  int key_dim = c.n_kv_heads * c.head_dim;
-  for (int i = 0; i < key_dim; ++i) {
-    key_cache(kv_pos)[i] = float_to_half(s.k()[i]);
-  }
-  int value_dim = c.n_kv_heads * c.v_head_dim;
-  for (int i = 0; i < value_dim; ++i) {
-    value_cache(kv_pos)[i] = float_to_half(s.v()[i]);
-  }
-
-  // Sink tokens remain untouched while the rest of the KV cache is incrementally 
-  // replaced in ring order, but sink i must always be positioned (max_seq_len - i)
-  // away from current timestep. Hence, each forward pass, rotate sink tokens 
-  // forward by 1. See https://arxiv.org/abs/2309.17453 for more.
-  for (int r = 0; r < kv_sink; r++) {
-    f16_t* key = key_cache(r);
-    // in-place update PE-chunk of each key head
-    int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
+    matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a, s.aqb());
+    // query transformations
+    matmul(s.q_rope(), s.q_a(), wq_rope_b<T>(), c.q_lora_rank, c.n_heads * c.qk_rope_head_dim, c.block_size.data(), _sq_rope_b, s.aqb());
+    matmul(s.q_c(), s.q_a(), wc<T>(), c.q_lora_rank, c.n_heads * c.kv_lora_rank, c.block_size.data(), _sc, s.aqb());
+    // Apply RoPE positional encoding to the PE chunks of q and kv_a
+    bool is_v3 = c.has_moegate_bias;
     for (int h = 0; h < c.n_heads; h++) {
-      f16_t* kh = key + h * c.head_dim;
       if (is_v3) {
-        rope_v3(kh + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+        rope_v3(s.q_rope(h), c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
       } else {
-        rope(s.ropebuf(), kh + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+        rope(s.ropebuf(), s.q_rope(h), c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
       }
     }
-  }
+    int kv_pe_offset = c.kv_lora_rank;
+    float* k_rope = s.kv_a() + kv_pe_offset;
+    if (is_v3) {
+      rope_v3(k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+    } else {
+      rope(s.ropebuf(), k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+    }
+    // rms norm to non-pe chunk of kv_a (compressed latent kv)
+    rmsnorm(s.kv_a(), s.kv_a(), rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
 
-  // Multihead attention. Iterate over all heads.
-  f16_t* kb = key_cache();
-  f16_t* vb = value_cache();
-  int q_per_kv_head = c.n_heads / c.n_kv_heads; // query heads per kv head (for MultiQueryAttention/GroupedQueryAttention)
-  int h;
-#pragma omp parallel for private(h)
-  for (h = 0; h < c.n_heads; h++) {
-    int k_head_offset = (h / q_per_kv_head) * c.head_dim;
-    int v_head_offset = (h / q_per_kv_head) * c.v_head_dim;
-    f16_t* kh = kb + k_head_offset;
-    f16_t* vh = vb + v_head_offset;
-    attn(s.xb2(h, c.v_head_dim), s.att(h), s.q(h), kh, vh, c.head_dim, c.v_head_dim, c.n_kv_heads, kv_len);
-  }
+    // update kv cache
+    for (int i = 0; i < c.kv_lora_rank; ++i) {
+      kv_nope_cache(kv_pos)[i] = float_to_half(s.kv_a()[i]);
+    }
+    for (int i = 0; i < c.qk_rope_head_dim; ++i) {
+      kv_rope_cache(kv_pos)[i] = float_to_half(k_rope[i]);
+    }
 
-  // final matmul to get output of the attention, using `hb` as temp storage
-  matmul(s.hb(), s.xb2(), wo<T>(), c.n_kv_heads * c.v_head_dim, c.dim, c.block_size.data(), _so, s.aqb());
+    // Sink tokens remain untouched while the rest of the KV cache is incrementally 
+    // replaced in ring order, but sink i must always be positioned (max_seq_len - i)
+    // away from current timestep. Hence, each forward pass, rotate sink tokens 
+    // forward by 1. See https://arxiv.org/abs/2309.17453 for more.
+    for (int r = 0; r < kv_sink; r++) {
+      f16_t* kv = kv_rope_cache(r);
+      if (is_v3) {
+        rope_v3(kv, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+      } else {
+        rope(s.ropebuf(), kv, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+      }
+    }
+
+    // Multi-latent attention. Iterate over all heads.
+    int h;
+  #pragma omp parallel for private(h)
+    for (h = 0; h < c.n_heads; h++) {
+      f16_t* kvh = kv_nope_cache() + h * c.kv_lora_rank;
+      f16_t* kh_rope = kv_rope_cache() + h * c.qk_rope_head_dim;
+      attn_mla(
+        s.xb2(h, c.kv_lora_rank), s.att(h), s.q_c(h), s.q_rope(h), kvh, kh_rope, 
+        c.head_dim, c.kv_lora_rank, c.qk_rope_head_dim, c.n_heads, kv_len
+      );
+    }
+
+    // final matmul to get output of the attention, using `hb` as temp storage
+    matmul(s.hb(), s.xb2(), wov<T>(), c.n_heads * c.kv_lora_rank, c.dim, c.block_size.data(), _sov, s.aqb());
+  } else {
+    int q_dim = c.n_heads * c.head_dim;
+
+    // qkv matmuls for this position
+    if (c.q_lora_rank > 0) {
+      matmul(s.q_a(), s.xb(), wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a, s.aqb());
+      switch (c.norm_type) {
+        case LayerNormType::RMSNorm: {
+          rmsnorm(s.q_a(), s.q_a(), rms_q_a_weight(), c.q_lora_rank, c.norm_eps);
+          break;
+        }
+      }
+      matmul(s.q(), s.q_a(), wq_b<T>(), c.q_lora_rank, q_dim, c.block_size.data(), _sq_b, s.aqb());
+    } else {
+      matmul(s.q(), s.xb(), wq<T>(), c.dim, q_dim, c.block_size.data(), _sq, s.aqb());
+    }
+    matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a, s.aqb());
+
+    // Apply RoPE positional encoding to the PE chunks of q and kv_a
+    int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
+    bool is_v3 = c.has_moegate_bias;
+    for (int h = 0; h < c.n_heads; h++) {
+      if (is_v3) {
+        rope_v3(s.q(h) + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+      } else {
+        rope(s.ropebuf(), s.q(h) + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+      }
+    }
+    int kv_pe_offset = c.kv_lora_rank;
+    float* k_rope = s.kv_a() + kv_pe_offset;
+    if (is_v3) {
+      rope_v3(k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+    } else {
+      rope(s.ropebuf(), k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+    }
+    // rms norm to non-pe chunk of kv_a (compressed latent kv)
+    rmsnorm(s.kv_a(), s.kv_a(), rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
+    // un-compress the latent kv via multiplication with wkv_b
+    int qk_nope_head_dim = c.head_dim - c.qk_rope_head_dim;
+    int uncompressed_kv_dim = c.n_kv_heads * (qk_nope_head_dim + c.v_head_dim);
+    matmul(s.kv_b(), s.kv_a(), wkv_b<T>(), c.kv_lora_rank, uncompressed_kv_dim, c.block_size.data(), _skv_b, s.aqb());
+    // concatenate kv_b and k_rope in each head to build key heads
+    for (int h = 0; h < c.n_heads; h++) {
+      for (int i = 0; i < qk_nope_head_dim; i++) {
+        s.k(h)[i] = s.kv_b(h)[i];
+      }
+      for (int i = 0; i < c.qk_rope_head_dim; i++) {
+        s.k(h)[qk_nope_head_dim + i] = k_rope[i];
+      }
+    }
+    // transfer value heads from kv_b
+    for (int h = 0; h < c.n_heads; h++) {
+      for (int i = 0; i < c.v_head_dim; i++) {
+        s.v(h)[i] = s.kv_b(h)[qk_nope_head_dim + i];
+      }
+    }
+
+    // update kv cache
+    int key_dim = c.n_kv_heads * c.head_dim;
+    for (int i = 0; i < key_dim; ++i) {
+      key_cache(kv_pos)[i] = float_to_half(s.k()[i]);
+    }
+    int value_dim = c.n_kv_heads * c.v_head_dim;
+    for (int i = 0; i < value_dim; ++i) {
+      value_cache(kv_pos)[i] = float_to_half(s.v()[i]);
+    }
+
+    // Sink tokens remain untouched while the rest of the KV cache is incrementally 
+    // replaced in ring order, but sink i must always be positioned (max_seq_len - i)
+    // away from current timestep. Hence, each forward pass, rotate sink tokens 
+    // forward by 1. See https://arxiv.org/abs/2309.17453 for more.
+    for (int r = 0; r < kv_sink; r++) {
+      f16_t* key = key_cache(r);
+      // in-place update PE-chunk of each key head
+      int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
+      for (int h = 0; h < c.n_heads; h++) {
+        f16_t* kh = key + h * c.head_dim;
+        if (is_v3) {
+          rope_v3(kh + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+        } else {
+          rope(s.ropebuf(), kh + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+        }
+      }
+    }
+
+    // Multihead attention. Iterate over all heads.
+    f16_t* kb = key_cache();
+    f16_t* vb = value_cache();
+    int q_per_kv_head = c.n_heads / c.n_kv_heads; // query heads per kv head (for MultiQueryAttention/GroupedQueryAttention)
+    int h;
+  #pragma omp parallel for private(h)
+    for (h = 0; h < c.n_heads; h++) {
+      int k_head_offset = (h / q_per_kv_head) * c.head_dim;
+      int v_head_offset = (h / q_per_kv_head) * c.v_head_dim;
+      f16_t* kh = kb + k_head_offset;
+      f16_t* vh = vb + v_head_offset;
+      attn(s.xb2(h, c.v_head_dim), s.att(h), s.q(h), kh, vh, c.head_dim, c.v_head_dim, c.n_kv_heads, kv_len);
+    }
+
+    // final matmul to get output of the attention, using `hb` as temp storage
+    matmul(s.hb(), s.xb2(), wo<T>(), c.n_kv_heads * c.v_head_dim, c.dim, c.block_size.data(), _so, s.aqb());
+  }
 
   // residual connection back into x
   for (int i = 0; i < c.dim; ++i) {
