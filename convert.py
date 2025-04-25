@@ -370,6 +370,7 @@ def load_weights(model_files: List[str], metadata: Metadata, tie_word_embeddings
     if metadata.use_mla:
       assert metadata.q_lora_rank > 0
       assert metadata.n_heads == metadata.n_kv_heads
+      head_dim = metadata.qk_nope_head_dim + metadata.qk_rope_head_dim
       save_weight_and_scale(
         f"model.layers.{l}.attn.wkv_a.weight", f"model.layers.{l}.attn.wkv_a.scale", 
         conv(f"model.layers.{l}.self_attn.kv_a_proj_with_mqa.weight", f"model.layers.{l}.self_attn.kv_a_proj_with_mqa.weight_scale_inv")
@@ -392,13 +393,13 @@ def load_weights(model_files: List[str], metadata: Metadata, tie_word_embeddings
         metadata.n_heads, -1, metadata.q_lora_rank
       )
       # (n_heads, head_dim-qk_rope_head_dim, kv_lora_rank)
-      k_nope_b_proj = kv_b_proj[:, :metadata.head_dim-metadata.qk_rope_head_dim]
+      k_nope_b_proj = kv_b_proj[:, :head_dim-metadata.qk_rope_head_dim]
       # (n_heads, v_head_dim, kv_lora_rank)
-      v_b_proj = kv_b_proj[:, metadata.head_dim-metadata.qk_rope_head_dim:]
+      v_b_proj = kv_b_proj[:, head_dim-metadata.qk_rope_head_dim:]
       # (n_heads, head_dim-qk_rope_head_dim, q_lora_rank)
-      q_nope_b_proj = q_b_proj[:, :metadata.head_dim-metadata.qk_rope_head_dim]
+      q_nope_b_proj = q_b_proj[:, :head_dim-metadata.qk_rope_head_dim]
       # (n_heads, qk_rope_head_dim, q_lora_rank)
-      q_rope_b_proj = q_b_proj[:, metadata.head_dim-metadata.qk_rope_head_dim:]
+      q_rope_b_proj = q_b_proj[:, head_dim-metadata.qk_rope_head_dim:]
       # (n_heads, kv_lora_rank, q_lora_rank)
       c_proj = torch.bmm(k_nope_b_proj.transpose(1, 2), q_nope_b_proj)
       
