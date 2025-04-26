@@ -5,9 +5,9 @@
 torch::Tensor quantize_q2_k(torch::Tensor& input) {
   // Row-major quantization (equivalent to block size [1, 256]) 
   // of input tensor using Q2_K scheme.
-  assert(input.ndimension() == 2 && "input must be 2D");
-  assert(input.size(1) % QK_K == 0 && "ncols must be divisible by QK_K");
-  assert(input.dtype() == torch::kFloat32 && "input must be float32");
+  TORCH_CHECK(input.ndimension() == 2, "input must be 2D");
+  TORCH_CHECK(input.size(1) % QK_K == 0, "ncols must be divisible by QK_K");
+  TORCH_CHECK(input.dtype() == torch::kFloat32, "input must be float32");
   if (!input.is_contiguous()) {
     input = input.contiguous();
   }

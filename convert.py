@@ -406,11 +406,11 @@ def load_weights(model_files: List[str], metadata: Metadata, tie_word_embeddings
       # NOTE: k_rope gets split from kv_a, so there is no k_rope_b_proj
       save_weight_and_scale(
         f"model.layers.{l}.attn.wq_rope_b.weight", f"model.layers.{l}.attn.wq_rope_b.scale", 
-        quantize(q_rope_b_proj)
+        quantize(q_rope_b_proj.reshape(-1, q_rope_b_proj.shape[-1]))
       )
       save_weight_and_scale(
         f"model.layers.{l}.attn.wc.weight", f"model.layers.{l}.attn.wc.scale", 
-        quantize(c_proj)
+        quantize(c_proj.reshape(-1, c_proj.shape[-1]))
       )
       
       # (dim, n_heads, v_head_dim)
