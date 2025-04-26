@@ -204,6 +204,7 @@ int YALMData::update_from_file(const std::string& filename, bool read_metadata) 
     } else if (key != "__metadata__") {
       Tensor& tensor = tensors[key];
       if (tensor.from_json(key, val, bytes_ptr, bytes_size) != 0) {
+        std::cerr << "failed to parse tensor " << key << std::endl;
         munmap(data, size);
         return -1;
       }
