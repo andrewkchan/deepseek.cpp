@@ -144,8 +144,8 @@ private:
   // current activations
   float* _x = nullptr;         // (dim,) - latest activation
   float* _xb = nullptr;        // (dim,) - activation inside a residual branch
-  float* _xb2 = nullptr;       // (max{dim, n_kv_heads * v_head_dim},) - activation inside a residual branch (second slot)
-  float* _hb = nullptr;        // (hidden_dim,) - buffer for hidden dimension in feedforward network
+  float* _xb2 = nullptr;       // (max{dim, n_kv_heads * v_head_dim, n_heads * kv_lora_rank},) - activation inside a residual branch (second slot)
+  float* _hb = nullptr;        // (max{dim, hidden_dim},) - buffer for hidden dimension in feedforward network
   float* _hb2 = nullptr;       // (hidden_dim,) - buffer for hidden dimension in feedforward network (second slot)
   float* _q_a = nullptr;       // (q_lora_rank,) - compressed (latent) query vector for latest timestamp
   float* _q = nullptr;         // (n_heads * head_dim,) - query vectors for latest timestamp
