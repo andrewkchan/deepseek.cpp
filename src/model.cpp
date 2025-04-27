@@ -535,8 +535,15 @@ InferenceState::InferenceState(const std::shared_ptr<Config> config):
   assert(config);
   _x = new float[config->dim]();
   _xb = new float[config->dim]();
-  _xb2 = new float[std::max(config->dim, config->n_kv_heads * config->v_head_dim)]();
-  _hb = new float[config->hidden_dim]();
+  _xb2 = new float[std::max({
+    config->dim, 
+    config->n_kv_heads * config->v_head_dim, 
+    config->n_heads * config->kv_lora_rank
+  })]();
+  _hb = new float[std::max({
+    config->dim, 
+    config->hidden_dim
+  })]();
   _hb2 = new float[config->hidden_dim]();
   if (config->q_lora_rank > 0) {
     _q_a = new float[config->q_lora_rank]();
@@ -558,10 +565,12 @@ InferenceState::InferenceState(const std::shared_ptr<Config> config):
     _active_experts = new int[config->n_active_routed]();
     _active_experts_weights = new float[config->n_active_routed]();
   }
+  // TODO: consider dynamically resizing based on inputs
   size_t aqb_nitems = std::max({
     config->dim,
     config->moe_intermediate_size,
     config->n_kv_heads * config->v_head_dim,
+    config->n_heads * config->kv_lora_rank,
     config->hidden_dim
   });
   size_t aqb_nblocks = aqb_nitems / QK_K;
