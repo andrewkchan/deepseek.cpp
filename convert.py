@@ -421,7 +421,7 @@ def load_weights(model_files: List[str], metadata: Metadata, tie_word_embeddings
       ov_proj = torch.bmm(
         o_proj.transpose(0, 1), # (n_heads, dim, v_head_dim)
         v_b_proj # (n_heads, v_head_dim, kv_lora_rank)
-      ).reshape(metadata.dim, metadata.n_heads * metadata.kv_lora_rank)
+      ).transpose(0, 1).reshape(metadata.dim, metadata.n_heads * metadata.kv_lora_rank)
       save_weight_and_scale(
         f"model.layers.{l}.attn.wov.weight", f"model.layers.{l}.attn.wov.scale", 
         quantize(ov_proj)
