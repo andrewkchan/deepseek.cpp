@@ -7,6 +7,7 @@
 #include "quant.h"
 
 #if DEBUG_MODEL
+#include <fstream>
 #include "fmt/format.h"
 static std::map<std::string, DebugTensor> _debug_map;
 std::map<std::string, DebugTensor>& debug_map_cpu() {
@@ -551,9 +552,9 @@ static void rope_v3(f16_t* vec, int d, int head_dim, int pos, float theta) {
 void attn(
   float* xout,    // (n_kv_heads * v_head_dim,) - output vector
   float* atth,    // (kv_len,) - scratch space to hold attention scores of the sequence
-  float* qh,      // (head_dim,) - query vector for this head
-  f16_t* kh,      // (kv_len, n_kv_heads, head_dim) - buffer containing key vectors of the sequence for all KV heads
-  f16_t* vh,      // (kv_len, n_kv_heads, v_head_dim) - buffer containing value vectors of the sequence for all KV heads
+  const float* qh,      // (head_dim,) - query vector for this head
+  const f16_t* kh,      // (kv_len, n_kv_heads, head_dim) - buffer containing key vectors of the sequence for all KV heads
+  const f16_t* vh,      // (kv_len, n_kv_heads, v_head_dim) - buffer containing value vectors of the sequence for all KV heads
   int head_dim,   // size of the "key-space"
   int v_head_dim, // size of the "value-space"
   int n_kv_heads, // number of kv heads, can be < n_heads (1 is MultiQueryAttention, >1 is GroupedQueryAttention)
@@ -589,10 +590,10 @@ void attn(
 void attn_mla(
   float* xout,    // (n_heads * kv_lora_rank,) - output vector
   float* atth,    // (kv_len,) - scratch space to hold attention scores of the sequence
-  float* qh_c,    // (kv_lora_rank,) - transformed latent query vector for this head
-  float* qh_rope, // (qk_rope_head_dim,) - PE-query vector for this head
-  f16_t* kvh,      // (kv_len, kv_lora_rank) - buffer containing latent vectors of the sequence
-  f16_t* kh_rope,  // (kv_len, qk_rope_head_dim) - buffer containing PE key-vectors of the sequence
+  const float* qh_c,    // (kv_lora_rank,) - transformed latent query vector for this head
+  const float* qh_rope, // (qk_rope_head_dim,) - PE-query vector for this head
+  const f16_t* compressed_kv,      // (kv_len, kv_lora_rank) - buffer containing latent vectors of the sequence
+  const f16_t* k_rope,  // (kv_len, qk_rope_head_dim) - buffer containing PE key-vectors of the sequence
   int head_dim, // used for softmax scale factor
   int kv_lora_rank, // size of the "latent-space"
   int qk_rope_head_dim, // size of the "PE-space"
@@ -605,10 +606,10 @@ void attn_mla(
   for (int t = 0; t < kv_len; ++t) {
     float score = 0.0f;
     for (int i = 0; i < kv_lora_rank; ++i) {
-      score += qh_c[i] * half_to_float(kvh[t * kv_stride + i]);
+      score += qh_c[i] * half_to_float(compressed_kv[t * kv_stride + i]);
     }
     for (int i = 0; i < qk_rope_head_dim; ++i) {
-      score += qh_rope[i] * half_to_float(kh_rope[t * k_rope_stride + i]);
+      score += qh_rope[i] * half_to_float(k_rope[t * k_rope_stride + i]);
     }
     score /= sqrtf(head_dim);
     atth[t] = score;
@@ -621,7 +622,7 @@ void attn_mla(
   for (int i = 0; i < kv_lora_rank; ++i) {
     float vi = 0.0f;
     for (int t = 0; t < kv_len; ++t) {
-      vi += atth[t] * half_to_float(kvh[t * kv_stride + i]);
+      vi += atth[t] * half_to_float(compressed_kv[t * kv_stride + i]);
     }
     xout[i] = vi;
   }
@@ -708,11 +709,18 @@ void Block::_block_cpu(
     int h;
   #pragma omp parallel for private(h)
     for (h = 0; h < c.n_heads; h++) {
-      f16_t* kvh = kv_nope_cache() + h * c.kv_lora_rank;
-      f16_t* kh_rope = kv_rope_cache() + h * c.qk_rope_head_dim;
       attn_mla(
-        s.xb2(h, c.kv_lora_rank), s.att(h), s.q_c(h), s.q_rope(h), kvh, kh_rope, 
-        c.head_dim, c.kv_lora_rank, c.qk_rope_head_dim, c.n_heads, kv_len
+        s.xb2(h, c.kv_lora_rank), 
+        s.att(h), 
+        s.q_c(h), 
+        s.q_rope(h), 
+        kv_nope_cache(), 
+        kv_rope_cache(), 
+        c.head_dim, 
+        c.kv_lora_rank, 
+        c.qk_rope_head_dim, 
+        c.n_heads, 
+        kv_len
       );
     }
 
