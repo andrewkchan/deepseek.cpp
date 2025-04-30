@@ -394,8 +394,10 @@ def load_weights(model_files: List[str], metadata: Metadata, tie_word_embeddings
       )
       # (n_heads, head_dim-qk_rope_head_dim, kv_lora_rank)
       k_nope_b_proj = kv_b_proj[:, :head_dim-metadata.qk_rope_head_dim]
-      # (n_heads, v_head_dim, kv_lora_rank)
-      v_b_proj = kv_b_proj[:, head_dim-metadata.qk_rope_head_dim:]
+      # (n_heads * v_head_dim, kv_lora_rank)
+      v_b_proj = kv_b_proj[:, head_dim-metadata.qk_rope_head_dim:].reshape(
+        metadata.n_heads * metadata.v_head_dim, metadata.kv_lora_rank
+      )
       # (n_heads, head_dim-qk_rope_head_dim, q_lora_rank)
       q_nope_b_proj = q_b_proj[:, :head_dim-metadata.qk_rope_head_dim]
       # (n_heads, qk_rope_head_dim, q_lora_rank)
@@ -413,18 +415,13 @@ def load_weights(model_files: List[str], metadata: Metadata, tie_word_embeddings
         quantize(c_proj.reshape(-1, c_proj.shape[-1]))
       )
       
-      # (dim, n_heads, v_head_dim)
-      o_proj = load_and_dequantize(
-        f"model.layers.{l}.self_attn.o_proj.weight", f"model.layers.{l}.self_attn.o_proj.weight_scale_inv"
-      ).reshape(metadata.dim, metadata.n_heads, metadata.v_head_dim)
-      # (dim, n_heads * kv_lora_rank)
-      ov_proj = torch.bmm(
-        o_proj.transpose(0, 1), # (n_heads, dim, v_head_dim)
-        v_b_proj # (n_heads, v_head_dim, kv_lora_rank)
-      ).transpose(0, 1).reshape(metadata.dim, metadata.n_heads * metadata.kv_lora_rank)
       save_weight_and_scale(
-        f"model.layers.{l}.attn.wov.weight", f"model.layers.{l}.attn.wov.scale", 
-        quantize(ov_proj)
+        f"model.layers.{l}.attn.wv_b.weight", f"model.layers.{l}.attn.wv_b.scale",
+        quantize(v_b_proj)
+      )
+      save_weight_and_scale(
+        f"model.layers.{l}.attn.wo.weight", f"model.layers.{l}.attn.wo.scale", 
+        conv(f"model.layers.{l}.self_attn.o_proj.weight", f"model.layers.{l}.self_attn.o_proj.weight_scale_inv")
       )
     else:
       save_weight_and_scale(

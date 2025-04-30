@@ -195,8 +195,8 @@ struct Block {
     const Tensor* sc,
     const Tensor* wq_rope_b,
     const Tensor* sq_rope_b,
-    const Tensor* wov,
-    const Tensor* sov,
+    const Tensor* wv_b,
+    const Tensor* sv_b,
     const Tensor* w1,
     const Tensor* s1,
     const Tensor* w2,
@@ -235,7 +235,7 @@ struct Block {
   template <typename T>
   T* wq_rope_b() const { return static_cast<T*>(_wq_rope_b); }
   template <typename T>
-  T* wov() const { return static_cast<T*>(_wov); }
+  T* wv_b() const { return static_cast<T*>(_wv_b); }
   template <typename T>
   T* w1() const { return static_cast<T*>(_w1); }
   template <typename T>
@@ -298,20 +298,20 @@ private:
   float* _sq_a = nullptr;
   void* _wkv_a = nullptr; // (kv_lora_rank + qk_rope_head_dim, dim)
   float* _skv_a = nullptr;
+  void* _wo = nullptr; // (dim, n_heads * v_head_dim)
+  float* _so = nullptr;
   // Naive (MHA) only
   void* _wq_b = nullptr; // (n_heads * head_dim, q_lora_rank)
   float* _sq_b = nullptr;
   void* _wkv_b = nullptr; // (n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim), kv_lora_rank)
   float* _skv_b = nullptr;
-  void* _wo = nullptr; // (dim, n_heads * v_head_dim)
-  float* _so = nullptr;
   // MLA only
   void* _wc = nullptr; // (n_heads * kv_lora_rank, q_lora_rank)
   float* _sc = nullptr;
   void* _wq_rope_b = nullptr; // (n_heads * qk_rope_head_dim, q_lora_rank)
   float* _sq_rope_b = nullptr;
-  void* _wov = nullptr; // (dim, n_heads * kv_lora_rank)
-  float* _sov = nullptr;
+  void* _wv_b = nullptr; // (n_heads * v_head_dim, kv_lora_rank)
+  float* _sv_b = nullptr;
 
   // weights for ffn
   void* _w1 = nullptr; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)

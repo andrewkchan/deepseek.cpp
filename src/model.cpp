@@ -137,11 +137,11 @@ double Config::active_bytes(size_t pos) const {
   }
   bytes_per_block += (kv_lora_rank + qk_rope_head_dim) * dim * bytes_per_weight; // wkv_a
   if (use_mla) {
-    bytes_per_block += dim * n_heads * kv_lora_rank * bytes_per_weight; // wov
+    bytes_per_block += n_heads * v_head_dim * kv_lora_rank * bytes_per_weight; // wv_b
   } else {
     bytes_per_block += n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim) * kv_lora_rank * bytes_per_weight; // wkv_b
-    bytes_per_block += dim * n_heads * v_head_dim * bytes_per_weight; // wo
   }
+  bytes_per_block += dim * n_heads * v_head_dim * bytes_per_weight; // wo
   if (n_routed_experts > 0) {
     bytes_per_block += n_routed_experts * dim * sizeof(float); // moegate
     bytes_per_block += n_routed_experts * sizeof(float); // moegate_bias
@@ -261,8 +261,8 @@ Block::Block(
   const Tensor* sc,
   const Tensor* wq_rope_b,
   const Tensor* sq_rope_b,
-  const Tensor* wov,
-  const Tensor* sov,
+  const Tensor* wv_b,
+  const Tensor* sv_b,
   const Tensor* w1,
   const Tensor* s1,
   const Tensor* w2,
@@ -334,17 +334,17 @@ Block::Block(
     wkv_a, config->weight_quant, {config->kv_lora_rank + config->qk_rope_head_dim, config->dim, 0, 0}, __LINE__
   );
   if (config->use_mla) {
-    _wov = check_tensor(
-      wov, config->weight_quant, {config->dim, config->n_heads * config->kv_lora_rank, 0, 0}, __LINE__
+    _wv_b = check_tensor(
+      wv_b, config->weight_quant, {config->n_heads * config->v_head_dim, config->kv_lora_rank, 0, 0}, __LINE__
     );
   } else {
     _wkv_b = check_tensor(
       wkv_b, config->weight_quant, {config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim), config->kv_lora_rank, 0, 0}, __LINE__
     );
-    _wo = check_tensor(
-      wo, config->weight_quant, {config->dim, config->n_heads * config->v_head_dim, 0, 0}, __LINE__
-    );
   }
+  _wo = check_tensor(
+    wo, config->weight_quant, {config->dim, config->n_heads * config->v_head_dim, 0, 0}, __LINE__
+  );
 
   if (config->n_routed_experts > 0 && layer_i >= config->first_k_dense_replace) {
     _moegate = static_cast<float*>(check_tensor(
@@ -428,9 +428,9 @@ Block::Block(
       __LINE__
     ));
     if (config->use_mla) {
-      _sov = static_cast<float*>(check_tensor(
-        sov, Quant::F32, 
-        {cdiv(config->dim, b0), cdiv(config->n_heads * config->kv_lora_rank, b1), 0, 0}, 
+      _sv_b = static_cast<float*>(check_tensor(
+        sv_b, Quant::F32, 
+        {cdiv(config->n_heads * config->v_head_dim, b0), cdiv(config->kv_lora_rank, b1), 0, 0}, 
         __LINE__
       ));
     } else {
@@ -439,12 +439,12 @@ Block::Block(
         {cdiv(config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim), b0), cdiv(config->kv_lora_rank, b1), 0, 0}, 
         __LINE__
       ));
-      _so = static_cast<float*>(check_tensor(
-        so, Quant::F32, 
-        {cdiv(config->dim, b0), cdiv(config->n_heads * config->v_head_dim, b1), 0, 0}, 
-        __LINE__
-      ));
     }
+    _so = static_cast<float*>(check_tensor(
+      so, Quant::F32, 
+      {cdiv(config->dim, b0), cdiv(config->n_heads * config->v_head_dim, b1), 0, 0}, 
+      __LINE__
+    ));
     if (config->n_routed_experts > 0 && layer_i >= config->first_k_dense_replace) {
       _s1 = static_cast<float*>(check_tensor(
         s1, Quant::F32, 
@@ -666,14 +666,14 @@ Model::Model(YALMData& yalm, int context) {
       !use_mla && need_weight_scales && config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_b.scale", i)) : nullptr,
       !use_mla ?get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_b.weight", i)) : nullptr,
       !use_mla && need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_b.scale", i)) : nullptr,
-      !use_mla ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wo.weight", i)) : nullptr,
-      !use_mla && need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wo.scale", i)) : nullptr,
+      get_tensor(yalm, fmt::format("model.layers.{}.attn.wo.weight", i)),
+      need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wo.scale", i)) : nullptr,
       use_mla ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wc.weight", i)) : nullptr,
       use_mla && need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wc.scale", i)) : nullptr,
       use_mla ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_rope_b.weight", i)) : nullptr,
       use_mla && need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_rope_b.scale", i)) : nullptr,
-      use_mla ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wov.weight", i)) : nullptr,
-      use_mla && need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wov.scale", i)) : nullptr,
+      use_mla ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wv_b.weight", i)) : nullptr,
+      use_mla && need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wv_b.scale", i)) : nullptr,
       get_tensor(yalm, fmt::format("model.layers.{}.mlp.w1.weight", i)),
       need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.mlp.w1.scale", i)) : nullptr,
       get_tensor(yalm, fmt::format("model.layers.{}.mlp.w2.weight", i)),
