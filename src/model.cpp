@@ -124,10 +124,24 @@ double Config::active_bytes(size_t pos) const {
   double bytes_per_block = 0;
   bytes_per_block += 2 * dim * sizeof(float); // rms_att_weight, rms_ffn_weight
   bytes_per_block += (kv_lora_rank + qk_rope_head_dim) * sizeof(float); // rms_kv_a_weight
-  bytes_per_block += n_heads * head_dim * dim * bytes_per_weight; // wq
+  if (q_lora_rank > 0) {
+    bytes_per_block += q_lora_rank * dim * bytes_per_weight; // wq_a
+    if (use_mla) {
+      bytes_per_block += n_heads * kv_lora_rank * q_lora_rank * bytes_per_weight; // wc
+      bytes_per_block += n_heads * qk_rope_head_dim * q_lora_rank * bytes_per_weight; // wq_rope_b
+    } else {
+      bytes_per_block += n_heads * head_dim * q_lora_rank * bytes_per_weight; // wq_b
+    }
+  } else {
+    bytes_per_block += n_heads * head_dim * dim * bytes_per_weight; // wq
+  }
   bytes_per_block += (kv_lora_rank + qk_rope_head_dim) * dim * bytes_per_weight; // wkv_a
-  bytes_per_block += n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim) * kv_lora_rank * bytes_per_weight; // wkv_b
-  bytes_per_block += n_heads * v_head_dim * dim * bytes_per_weight; // wo
+  if (use_mla) {
+    bytes_per_block += dim * n_heads * kv_lora_rank * bytes_per_weight; // wov
+  } else {
+    bytes_per_block += n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim) * kv_lora_rank * bytes_per_weight; // wkv_b
+    bytes_per_block += dim * n_heads * v_head_dim * bytes_per_weight; // wo
+  }
   if (n_routed_experts > 0) {
     bytes_per_block += n_routed_experts * dim * sizeof(float); // moegate
     bytes_per_block += n_routed_experts * sizeof(float); // moegate_bias
@@ -140,7 +154,12 @@ double Config::active_bytes(size_t pos) const {
   }
   size_t kv_len = std::min(static_cast<size_t>(max_seq_len), pos + 1);
   size_t kv_entry_size = sizeof(f16_t);
-  bytes_per_block += 2 * kv_len * n_kv_heads * head_dim * kv_entry_size; // key_cache, value_cache
+  if (use_mla) {
+    bytes_per_block += kv_len * kv_lora_rank * kv_entry_size; // kv_nope_cache
+    bytes_per_block += kv_len * qk_rope_head_dim * kv_entry_size; // kv_rope_cache
+  } else {
+    bytes_per_block += 2 * kv_len * n_kv_heads * head_dim * kv_entry_size; // key_cache, value_cache
+  }
 
   double bytes = 0;
   bytes += dim * bytes_per_weight; // 1 row of token_embedding_table
