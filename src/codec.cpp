@@ -152,7 +152,7 @@ int Tensor::from_json(const std::string& name, const json& val, void* bytes_ptr,
   return 0;
 }
 
-int YALMData::update_from_file(const std::string& filename, bool read_metadata) {
+int YALMData::update_from_file(const std::string& filename, bool read_metadata, bool lock_model_weights) {
   std::cout << "loading data from file: " << filename << std::endl;
   int fd = open(filename.c_str(), O_RDONLY);
   if (fd == -1) {
@@ -166,10 +166,13 @@ int YALMData::update_from_file(const std::string& filename, bool read_metadata) 
   }
   
   size_t size = st.st_size;
-  void* data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+  void* data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_POPULATE, fd, 0);
   if (data == MAP_FAILED) {
     close(fd);
     return -1;
+  }
+  if (lock_model_weights && mlock(data, size) != 0) {
+    std::cerr << "Warning: mlock failed for model data. Performance may be suboptimal. Are you running as sudo?" << std::endl;
   }
 
 #ifdef __linux__
@@ -214,7 +217,7 @@ int YALMData::update_from_file(const std::string& filename, bool read_metadata) 
   return 0;
 }
 
-int YALMData::from_directory(const std::string& dirname) {
+int YALMData::from_directory(const std::string& dirname, bool lock_model_weights) {
   std::vector<std::string> files;
   DIR* dir = opendir(dirname.c_str());
   if (dir == nullptr) {
@@ -242,7 +245,7 @@ int YALMData::from_directory(const std::string& dirname) {
   std::sort(files.begin(), files.end());
 
   // Read first file with metadata
-  if (update_from_file(files[0], true) != 0) {
+  if (update_from_file(files[0], true, lock_model_weights) != 0) {
     std::cout << "failed to read metadata" << std::endl;
     return -1;
   }
@@ -251,7 +254,7 @@ int YALMData::from_directory(const std::string& dirname) {
 
   // Read remaining files without metadata
   for (size_t i = 1; i < files.size(); i++) {
-    if (update_from_file(files[i], false) != 0) {
+    if (update_from_file(files[i], false, lock_model_weights) != 0) {
       std::cout << "failed to read file " << files[i] << std::endl;
       return -1;
     }

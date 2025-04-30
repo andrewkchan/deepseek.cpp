@@ -106,10 +106,10 @@ struct YALMData {
   // Update YALMData with tensors from a file
   // If read_metadata is true, also update metadata from this file
   // Returns 0 if successful, other if failed
-  int update_from_file(const std::string& filename, bool read_metadata = false);
+  int update_from_file(const std::string& filename, bool read_metadata, bool lock_model_weights);
 
   // Initialize YALMData from all files in a directory
   // Metadata is read from the first file (in sorted order)
   // Returns 0 if successful, other if failed
-  int from_directory(const std::string& dirname);
+  int from_directory(const std::string& dirname, bool lock_model_weights);
 };
