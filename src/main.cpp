@@ -335,9 +335,6 @@ int main(int argc, char* argv[]) {
   }
   for (int i = 2; i < argc;) {
     // do some basic validation
-    if (i + 1 >= argc) {
-      error_usage();
-    } // must have arg after flag
     if (argv[i][0] != '-') {
       error_usage();
     } // must start with dash
