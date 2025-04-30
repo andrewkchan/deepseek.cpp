@@ -18,6 +18,7 @@ const std::map<std::string, double>& profile_times() {
   return _profile_times;
 }
 
+#if PROFILE_ENABLED
 ProfileScope::ProfileScope(std::string name) {
   _profile_scopes.push_back(name);
   _start = omp_get_wtime();
@@ -38,6 +39,11 @@ ProfileScope::~ProfileScope() {
   }
   _profile_scopes.pop_back();
 }
+#else
+ProfileScope::ProfileScope(std::string name) {}
+ProfileScope::ProfileScope(const char* name) {}
+ProfileScope::~ProfileScope() {}
+#endif
 
 ProfileDisabledScope::ProfileDisabledScope() {
   _was_enabled = get_profile_enabled();
