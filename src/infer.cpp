@@ -277,19 +277,24 @@ static void matmul(
   block_q8_K* aqb_q8 = (block_q8_K*)aqb;
   int chunk_size = QK_K * 2;
   int num_chunks = cdiv(n, chunk_size);
-#pragma omp parallel for
-  for (int i = 0; i < num_chunks; i++) {
-    int start = i * chunk_size;
-    int k = (i == num_chunks - 1) ? (n - start) : chunk_size;
-    k = (k / QK_K) * QK_K;
-    if (k > 0) {
-      quantize_row_q8_K_ref(x + start, aqb_q8 + (start/QK_K), k);
-    }
+  {
+    PROFILE_BLOCK("quantize_acts");
+    #pragma omp parallel for
+      for (int i = 0; i < num_chunks; i++) {
+        int start = i * chunk_size;
+        int k = (i == num_chunks - 1) ? (n - start) : chunk_size;
+        if (k > 0) {
+          quantize_row_q8_K_ref(x + start, aqb_q8 + (start/QK_K), k);
+        }
+      }
   }
-  int i;
-#pragma omp parallel for private(i)
-  for (i = 0; i < d; i++) {
-    ggml_vec_dot_q2_K_q8_K(n, xout + i, w + i * blocks_per_row, aqb_q8);
+  {
+    PROFILE_BLOCK("matmul_w2a8");
+    int i;
+  #pragma omp parallel for private(i)
+    for (i = 0; i < d; i++) {
+      ggml_vec_dot_q2_K_q8_K(n, xout + i, w + i * blocks_per_row, aqb_q8);
+    }
   }
 }
 

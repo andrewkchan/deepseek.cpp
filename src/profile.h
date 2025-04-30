@@ -17,7 +17,7 @@ const std::map<std::string, double>& profile_times();
 // The execution time will be saved with key `my_block` in the profile_times map.
 // `my_block` need not be a variable name; it can be any string.
 #define PROFILE_BLOCK(name) \
-  OmpProfileGuard profile_guard(#name)
+  ProfileScope profile_scope(#name)
 
 // This macro can be used to profile a single statement.
 // Example:
@@ -31,25 +31,17 @@ const std::map<std::string, double>& profile_times();
   X; \
 } while(0)
 
-struct OmpProfileGuard {
-public:
-  OmpProfileGuard(const char* name);
-  ~OmpProfileGuard();
+struct ProfileScope {
+  ProfileScope(std::string name);
+  ProfileScope(const char* name);
+  ~ProfileScope();
 private:
-  const char* _name;
   double _start;
 };
 
-struct ProfileDisabledGuard {
-  ProfileDisabledGuard();
-  ~ProfileDisabledGuard();
+struct ProfileDisabledScope {
+  ProfileDisabledScope();
+  ~ProfileDisabledScope();
 private:
   bool _was_enabled;
-};
-
-struct ProfileScope {
-  ProfileScope(std::string name);
-  ~ProfileScope();
-private:
-  std::string _name;
 };
