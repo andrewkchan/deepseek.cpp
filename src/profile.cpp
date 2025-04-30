@@ -18,11 +18,15 @@ const std::map<std::string, double>& profile_times() {
   return _profile_times;
 }
 
-OmpProfileGuard::OmpProfileGuard(const char* name) : _name(name) {
+ProfileScope::ProfileScope(std::string name) {
+  _profile_scopes.push_back(name);
   _start = omp_get_wtime();
 }
 
-OmpProfileGuard::~OmpProfileGuard() {
+ProfileScope::ProfileScope(const char* name) : 
+  ProfileScope(std::string(name)) {}
+
+ProfileScope::~ProfileScope() {
   double end = omp_get_wtime();
   double duration = end - _start;
   if (_profile_enabled) {
@@ -30,24 +34,16 @@ OmpProfileGuard::~OmpProfileGuard() {
     for (const auto& scope : _profile_scopes) {
       key += scope + ".";
     }
-    key += _name;
     _profile_times[key] += duration;
   }
+  _profile_scopes.pop_back();
 }
 
-ProfileDisabledGuard::ProfileDisabledGuard() {
+ProfileDisabledScope::ProfileDisabledScope() {
   _was_enabled = get_profile_enabled();
   set_profile_enabled(false);
 }
 
-ProfileDisabledGuard::~ProfileDisabledGuard() {
+ProfileDisabledScope::~ProfileDisabledScope() {
   set_profile_enabled(_was_enabled);
-}
-
-ProfileScope::ProfileScope(std::string name) : _name(name) {
-  _profile_scopes.push_back(name);
-}
-
-ProfileScope::~ProfileScope() {
-  _profile_scopes.pop_back();
 }

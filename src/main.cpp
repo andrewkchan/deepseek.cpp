@@ -62,7 +62,7 @@ void run_completion(
   }
 
   {
-    ProfileDisabledGuard profile_disabled;
+    ProfileDisabledScope profile_disabled;
     // Do one inference as warmup.
     // On CPU, this ensures all tensors are loaded into memory via mmap.
     model.forward(state, 0, 0);
@@ -90,7 +90,7 @@ void run_completion(
   // Hydrate KV cache by forwarding model on all prompt tokens and discarding output.
   // This also generates output logits for the last token.
   for (size_t pos = 0; pos < encoding.size(); pos++) {
-    ProfileScope scope(fmt::format("fwd_pos_{}_hydrate", pos));
+    ProfileScope scope(fmt::format("fwd_pos_{:03d}_hydrate", pos));
     int token_id = encoding[pos];
     InferenceMode inferMode = pos + 1 == encoding.size() ? 
       InferenceMode::OUTPUT_LOGITS : InferenceMode::HYDRATE_KV_CACHE;
@@ -109,7 +109,7 @@ void run_completion(
     if (token_id == tokenizer.eos_id || token_id == tokenizer.eot_id) {
       break;
     }
-    ProfileScope scope(fmt::format("fwd_pos_{}_decode", encoding.size() - 1));
+    ProfileScope scope(fmt::format("fwd_pos_{:03d}_decode", encoding.size() - 1));
     model.forward(state, token_id, encoding.size() - 1);
     read_bytes += model.config->active_bytes(encoding.size() - 1);
   }
@@ -153,7 +153,7 @@ void run_perplexity(
   std::cout << "Model active bytes with full context window: " << model.config->active_bytes(model.config->max_seq_len) << std::endl;
 
   {
-    ProfileDisabledGuard profile_disabled;
+    ProfileDisabledScope profile_disabled;
     // Do one inference as warmup.
     // On CPU, this ensures all tensors are loaded into memory via mmap.
     model.forward(state, 0, 0);
