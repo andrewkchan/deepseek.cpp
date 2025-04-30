@@ -1,8 +1,10 @@
 #include "profile.h"
 
-static bool _profile_enabled = false;
+#include <vector>
+
+static bool _profile_enabled = true;
+static std::vector<std::string> _profile_scopes;
 static std::map<std::string, double> _profile_times;
-static std::map<std::string, int> _profile_counts;
 
 void set_profile_enabled(bool enabled) {
   _profile_enabled = enabled;
@@ -16,10 +18,6 @@ const std::map<std::string, double>& profile_times() {
   return _profile_times;
 }
 
-const std::map<std::string, int>& profile_counts() {
-  return _profile_counts;
-}
-
 OmpProfileGuard::OmpProfileGuard(const char* name) : _name(name) {
   _start = omp_get_wtime();
 }
@@ -28,8 +26,12 @@ OmpProfileGuard::~OmpProfileGuard() {
   double end = omp_get_wtime();
   double duration = end - _start;
   if (_profile_enabled) {
-    _profile_times[_name] += duration;
-    _profile_counts[_name]++;
+    std::string key = "";
+    for (const auto& scope : _profile_scopes) {
+      key += scope + ".";
+    }
+    key += _name;
+    _profile_times[key] += duration;
   }
 }
 
@@ -40,4 +42,12 @@ ProfileDisabledGuard::ProfileDisabledGuard() {
 
 ProfileDisabledGuard::~ProfileDisabledGuard() {
   set_profile_enabled(_was_enabled);
+}
+
+ProfileScope::ProfileScope(std::string name) : _name(name) {
+  _profile_scopes.push_back(name);
+}
+
+ProfileScope::~ProfileScope() {
+  _profile_scopes.pop_back();
 }

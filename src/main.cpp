@@ -54,6 +54,7 @@ void run_completion(
   Tokenizer tokenizer(model_data);
 
   std::cout << "Model active bytes with full context window: " << model.config->active_bytes(model.config->max_seq_len) << std::endl;
+  std::cout << "Model active bytes with no context: " << model.config->active_bytes(0) << std::endl;
 
   if (num_steps == 0) {
     // `-n 0` means use the full context length
@@ -89,6 +90,7 @@ void run_completion(
   // Hydrate KV cache by forwarding model on all prompt tokens and discarding output.
   // This also generates output logits for the last token.
   for (size_t pos = 0; pos < encoding.size(); pos++) {
+    ProfileScope scope(fmt::format("fwd_pos_{}_hydrate", pos));
     int token_id = encoding[pos];
     InferenceMode inferMode = pos + 1 == encoding.size() ? 
       InferenceMode::OUTPUT_LOGITS : InferenceMode::HYDRATE_KV_CACHE;
@@ -107,6 +109,7 @@ void run_completion(
     if (token_id == tokenizer.eos_id || token_id == tokenizer.eot_id) {
       break;
     }
+    ProfileScope scope(fmt::format("fwd_pos_{}_decode", encoding.size() - 1));
     model.forward(state, token_id, encoding.size() - 1);
     read_bytes += model.config->active_bytes(encoding.size() - 1);
   }
