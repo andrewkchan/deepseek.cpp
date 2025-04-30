@@ -5,6 +5,7 @@
 #include <math.h>
 
 #include "quant.h"
+#include "profile.h"
 
 #if DEBUG_MODEL
 #include <fstream>
@@ -652,19 +653,20 @@ void Block::_block_cpu(
   }
 
   if (c.use_mla) {
+    PROFILE_BLOCK(attn_mla);
     assert(c.q_lora_rank > 0); // TODO: support MLA with q_lora_rank == 0 (DeepSeek V2 Lite)
     // qkv down projections for this position
-    matmul(s.q_a(), s.xb(), wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a, s.aqb());
+    PROFILE(matmul(s.q_a(), s.xb(), wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a, s.aqb()));
     switch (c.norm_type) {
       case LayerNormType::RMSNorm: {
         rmsnorm(s.q_a(), s.q_a(), rms_q_a_weight(), c.q_lora_rank, c.norm_eps);
         break;
       }
     }
-    matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a, s.aqb());
+    PROFILE(matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a, s.aqb()));
     // query transformations
-    matmul(s.q_rope(), s.q_a(), wq_rope_b<T>(), c.q_lora_rank, c.n_heads * c.qk_rope_head_dim, c.block_size.data(), _sq_rope_b, s.aqb());
-    matmul(s.q_c(), s.q_a(), wc<T>(), c.q_lora_rank, c.n_heads * c.kv_lora_rank, c.block_size.data(), _sc, s.aqb());
+    PROFILE(matmul(s.q_rope(), s.q_a(), wq_rope_b<T>(), c.q_lora_rank, c.n_heads * c.qk_rope_head_dim, c.block_size.data(), _sq_rope_b, s.aqb()));
+    PROFILE(matmul(s.q_c(), s.q_a(), wc<T>(), c.q_lora_rank, c.n_heads * c.kv_lora_rank, c.block_size.data(), _sc, s.aqb()));
     // Apply RoPE positional encoding to the PE chunks of q and kv_a
     bool is_v3 = c.has_moegate_bias;
     for (int h = 0; h < c.n_heads; h++) {
@@ -705,44 +707,48 @@ void Block::_block_cpu(
       }
     }
 
-    // Multi-latent attention. Iterate over all heads.
-    int h;
-  #pragma omp parallel for private(h)
-    for (h = 0; h < c.n_heads; h++) {
-      attn_mla(
-        s.xb2(h, c.kv_lora_rank), 
-        s.att(h), 
-        s.q_c(h), 
-        s.q_rope(h), 
-        kv_nope_cache(), 
-        kv_rope_cache(), 
-        c.head_dim, 
-        c.kv_lora_rank, 
-        c.qk_rope_head_dim, 
-        c.n_heads, 
-        kv_len
-      );
+    {
+      PROFILE_BLOCK(self_attn_mla);
+      // Multi-latent attention. Iterate over all heads.
+      int h;
+    #pragma omp parallel for private(h)
+      for (h = 0; h < c.n_heads; h++) {
+        attn_mla(
+          s.xb2(h, c.kv_lora_rank), 
+          s.att(h), 
+          s.q_c(h), 
+          s.q_rope(h), 
+          kv_nope_cache(), 
+          kv_rope_cache(), 
+          c.head_dim, 
+          c.kv_lora_rank, 
+          c.qk_rope_head_dim, 
+          c.n_heads, 
+          kv_len
+        );
+      }
     }
 
     // final matmul to get output of the attention, using `hb` as temp storage
-    matmul(s.hb(), s.xb2(), wov<T>(), c.n_heads * c.kv_lora_rank, c.dim, c.block_size.data(), _sov, s.aqb());
+    PROFILE(matmul(s.hb(), s.xb2(), wov<T>(), c.n_heads * c.kv_lora_rank, c.dim, c.block_size.data(), _sov, s.aqb()));
   } else {
+    PROFILE_BLOCK(attn_mha);
     int q_dim = c.n_heads * c.head_dim;
 
     // qkv matmuls for this position
     if (c.q_lora_rank > 0) {
-      matmul(s.q_a(), s.xb(), wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a, s.aqb());
+      PROFILE(matmul(s.q_a(), s.xb(), wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a, s.aqb()));
       switch (c.norm_type) {
         case LayerNormType::RMSNorm: {
           rmsnorm(s.q_a(), s.q_a(), rms_q_a_weight(), c.q_lora_rank, c.norm_eps);
           break;
         }
       }
-      matmul(s.q(), s.q_a(), wq_b<T>(), c.q_lora_rank, q_dim, c.block_size.data(), _sq_b, s.aqb());
+      PROFILE(matmul(s.q(), s.q_a(), wq_b<T>(), c.q_lora_rank, q_dim, c.block_size.data(), _sq_b, s.aqb()));
     } else {
-      matmul(s.q(), s.xb(), wq<T>(), c.dim, q_dim, c.block_size.data(), _sq, s.aqb());
+      PROFILE(matmul(s.q(), s.xb(), wq<T>(), c.dim, q_dim, c.block_size.data(), _sq, s.aqb()));
     }
-    matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a, s.aqb());
+    PROFILE(matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a, s.aqb()));
 
     // Apply RoPE positional encoding to the PE chunks of q and kv_a
     int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
@@ -766,7 +772,7 @@ void Block::_block_cpu(
     // un-compress the latent kv via multiplication with wkv_b
     int qk_nope_head_dim = c.head_dim - c.qk_rope_head_dim;
     int uncompressed_kv_dim = c.n_kv_heads * (qk_nope_head_dim + c.v_head_dim);
-    matmul(s.kv_b(), s.kv_a(), wkv_b<T>(), c.kv_lora_rank, uncompressed_kv_dim, c.block_size.data(), _skv_b, s.aqb());
+    PROFILE(matmul(s.kv_b(), s.kv_a(), wkv_b<T>(), c.kv_lora_rank, uncompressed_kv_dim, c.block_size.data(), _skv_b, s.aqb()));
     // concatenate kv_b and k_rope in each head to build key heads
     for (int h = 0; h < c.n_heads; h++) {
       for (int i = 0; i < qk_nope_head_dim; i++) {
@@ -811,22 +817,26 @@ void Block::_block_cpu(
       }
     }
 
-    // Multihead attention. Iterate over all heads.
-    f16_t* kb = key_cache();
-    f16_t* vb = value_cache();
-    int q_per_kv_head = c.n_heads / c.n_kv_heads; // query heads per kv head (for MultiQueryAttention/GroupedQueryAttention)
-    int h;
-  #pragma omp parallel for private(h)
-    for (h = 0; h < c.n_heads; h++) {
-      int k_head_offset = (h / q_per_kv_head) * c.head_dim;
-      int v_head_offset = (h / q_per_kv_head) * c.v_head_dim;
-      f16_t* kh = kb + k_head_offset;
-      f16_t* vh = vb + v_head_offset;
-      attn(s.xb2(h, c.v_head_dim), s.att(h), s.q(h), kh, vh, c.head_dim, c.v_head_dim, c.n_kv_heads, kv_len);
+    {
+      PROFILE_BLOCK(self_attn_mha);
+      // Multihead attention. Iterate over all heads.
+      f16_t* kb = key_cache();
+      f16_t* vb = value_cache();
+      int q_per_kv_head = c.n_heads / c.n_kv_heads; // query heads per kv head (for MultiQueryAttention/GroupedQueryAttention)
+      int h;
+    #pragma omp parallel for private(h)
+      for (h = 0; h < c.n_heads; h++) {
+        int k_head_offset = (h / q_per_kv_head) * c.head_dim;
+        int v_head_offset = (h / q_per_kv_head) * c.v_head_dim;
+        f16_t* kh = kb + k_head_offset;
+        f16_t* vh = vb + v_head_offset;
+        attn(s.xb2(h, c.v_head_dim), s.att(h), s.q(h), kh, vh, c.head_dim, c.v_head_dim, c.n_kv_heads, kv_len);
+      }
     }
 
+
     // final matmul to get output of the attention, using `hb` as temp storage
-    matmul(s.hb(), s.xb2(), wo<T>(), c.n_kv_heads * c.v_head_dim, c.dim, c.block_size.data(), _so, s.aqb());
+    PROFILE(matmul(s.hb(), s.xb2(), wo<T>(), c.n_kv_heads * c.v_head_dim, c.dim, c.block_size.data(), _so, s.aqb()));
   }
 
   // residual connection back into x
@@ -843,8 +853,9 @@ void Block::_block_cpu(
   }
 
   if (c.n_routed_experts > 0 && moegate() != nullptr) {
+    PROFILE_BLOCK(ffn_moe);
     // Block is a sparse MoE FFN layer
-    matmul_unscaled(s.moe_weights(), s.xb(), moegate(), c.dim, c.n_routed_experts);
+    PROFILE(matmul_unscaled(s.moe_weights(), s.xb(), moegate(), c.dim, c.n_routed_experts));
     moe_gate(
       s.active_experts_weights(), _moegate_bias, s.active_experts(), s.moe_weights(),
       c.n_routed_experts, c.n_active_routed, c.norm_topk_prob, c.routed_scaling_factor,
@@ -864,8 +875,8 @@ void Block::_block_cpu(
       size_t scale2_offset = expert_index * expert_scale2_size;
       // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
       // Note this is a feedforward with a GLU, not a simple MLP.
-      matmul(s.hb(), s.xb(), w1<T>() + weight_offset, c.dim, c.moe_intermediate_size, c.block_size.data(), _s1 + scale13_offset, s.aqb());
-      matmul(s.hb2(), s.xb(), w3<T>() + weight_offset, c.dim, c.moe_intermediate_size, c.block_size.data(), _s3 + scale13_offset, s.aqb());
+      PROFILE(matmul(s.hb(), s.xb(), w1<T>() + weight_offset, c.dim, c.moe_intermediate_size, c.block_size.data(), _s1 + scale13_offset, s.aqb()));
+      PROFILE(matmul(s.hb2(), s.xb(), w3<T>() + weight_offset, c.dim, c.moe_intermediate_size, c.block_size.data(), _s3 + scale13_offset, s.aqb()));
       switch (c.act) {
         case ActivationType::GELU: {
           for (int i = 0; i < c.moe_intermediate_size; ++i) {
@@ -880,7 +891,7 @@ void Block::_block_cpu(
           break;
         }
       }
-      matmul(s.xb2(), s.hb(), w2<T>() + weight_offset, c.moe_intermediate_size, c.dim, c.block_size.data(), _s2 + scale2_offset, s.aqb());
+      PROFILE(matmul(s.xb2(), s.hb(), w2<T>() + weight_offset, c.moe_intermediate_size, c.dim, c.block_size.data(), _s2 + scale2_offset, s.aqb()));
       float expert_weight = s.active_experts_weights()[k];
       for (int i = 0; i < c.dim; ++i) {
         s.x()[i] += s.xb2()[i] * expert_weight;
@@ -889,8 +900,8 @@ void Block::_block_cpu(
     if (c.n_shared_experts > 0) {
       // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
       // Note this is a feedforward with a GLU, not a simple MLP.
-      matmul(s.hb(), s.xb(), shared_w1<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size, c.block_size.data(), _shared_s1, s.aqb());
-      matmul(s.hb2(), s.xb(), shared_w3<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size, c.block_size.data(), _shared_s3, s.aqb());
+      PROFILE(matmul(s.hb(), s.xb(), shared_w1<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size, c.block_size.data(), _shared_s1, s.aqb()));
+      PROFILE(matmul(s.hb2(), s.xb(), shared_w3<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size, c.block_size.data(), _shared_s3, s.aqb()));
       switch (c.act) {
         case ActivationType::GELU: {
           for (int i = 0; i < c.n_shared_experts * c.moe_intermediate_size; ++i) {
@@ -906,18 +917,19 @@ void Block::_block_cpu(
         }
       }
 
-      matmul(s.xb2(), s.hb(), shared_w2<T>(), c.n_shared_experts * c.moe_intermediate_size, c.dim, c.block_size.data(), _shared_s2, s.aqb());
+      PROFILE(matmul(s.xb2(), s.hb(), shared_w2<T>(), c.n_shared_experts * c.moe_intermediate_size, c.dim, c.block_size.data(), _shared_s2, s.aqb()));
       // residual connection back into x
       for (int i = 0; i < c.dim; ++i) {
         s.x()[i] += s.xb2()[i];
       }
     }
   } else {
+    PROFILE_BLOCK(ffn_dense);
     // Block is a dense FFN layer
     // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
     // Note this is a feedforward with a GLU, not a simple MLP.
-    matmul(s.hb(), s.xb(), w1<T>(), c.dim, c.hidden_dim, c.block_size.data(), _s1, s.aqb());
-    matmul(s.hb2(), s.xb(), w3<T>(), c.dim, c.hidden_dim, c.block_size.data(), _s3, s.aqb());
+    PROFILE(matmul(s.hb(), s.xb(), w1<T>(), c.dim, c.hidden_dim, c.block_size.data(), _s1, s.aqb()));
+    PROFILE(matmul(s.hb2(), s.xb(), w3<T>(), c.dim, c.hidden_dim, c.block_size.data(), _s3, s.aqb()));
     switch (c.act) {
       case ActivationType::GELU: {
         for (int i = 0; i < c.hidden_dim; ++i) {
@@ -932,7 +944,7 @@ void Block::_block_cpu(
         break;
       }
     }
-    matmul(s.xb2(), s.hb(), w2<T>(), c.hidden_dim, c.dim, c.block_size.data(), _s2, s.aqb());
+    PROFILE(matmul(s.xb2(), s.hb(), w2<T>(), c.hidden_dim, c.dim, c.block_size.data(), _s2, s.aqb()));
     // residual connection back into x
     for (int i = 0; i < c.dim; ++i) {
       s.x()[i] += s.xb2()[i];
@@ -1057,7 +1069,7 @@ void Model::_forward_cpu(InferenceState& s, int token, int pos, InferenceMode mo
   const Config& c = *config;
 
   // copy the token embedding into `x`
-  _copy_embedding(s, token);
+  PROFILE(_copy_embedding(s, token));
 
   // When decoding past the context length, keep the first few tokens in the KV cache
   // untouched as "attention sinks" while replacing the rest in ring order.
@@ -1085,25 +1097,28 @@ void Model::_forward_cpu(InferenceState& s, int token, int pos, InferenceMode mo
   }
 
   // classifier into logits
-  switch (c.weight_quant) {
-    case Quant::F32: {
-      matmul_unscaled(s.logits(), s.x(), static_cast<float*>(wcls), c.dim, c.vocab_size);
-      break;
-    }
-    case Quant::F16: {
-      matmul_unscaled(s.logits(), s.x(), static_cast<f16_t*>(wcls), c.dim, c.vocab_size);
-      break;
-    }
-    case Quant::F8E5M2: {
-      matmul(s.logits(), s.x(), static_cast<f8e5m2_t*>(wcls), c.dim, c.vocab_size, c.block_size.data(), scls, s.aqb());
-      break;
-    }
-    case Quant::Q2_K: {
-      matmul(s.logits(), s.x(), static_cast<block_q2_K*>(wcls), c.dim, c.vocab_size, c.block_size.data(), scls, s.aqb());
-      break;
-    }
-    default: {
-      assert(false && "unsupported weight quantization");
+  {
+    PROFILE_BLOCK(lm_head);
+    switch (c.weight_quant) {
+      case Quant::F32: {
+        matmul_unscaled(s.logits(), s.x(), static_cast<float*>(wcls), c.dim, c.vocab_size);
+        break;
+      }
+      case Quant::F16: {
+        matmul_unscaled(s.logits(), s.x(), static_cast<f16_t*>(wcls), c.dim, c.vocab_size);
+        break;
+      }
+      case Quant::F8E5M2: {
+        matmul(s.logits(), s.x(), static_cast<f8e5m2_t*>(wcls), c.dim, c.vocab_size, c.block_size.data(), scls, s.aqb());
+        break;
+      }
+      case Quant::Q2_K: {
+        matmul(s.logits(), s.x(), static_cast<block_q2_K*>(wcls), c.dim, c.vocab_size, c.block_size.data(), scls, s.aqb());
+        break;
+      }
+      default: {
+        assert(false && "unsupported weight quantization");
+      }
     }
   }
 }
