@@ -46,6 +46,7 @@ Usage:   main <checkpoint_dir> [options]
 Example: main model_weights_dir/ -i "Q: What is the meaning of life?"
 Options:
   -h Display this help message
+  -L Locks model weights to RAM, disabling swap. Requires sudo.
   -m [completion,passkey,perplexity] which mode to run in (default - completion)
   -T <int> sliding window context length (0 - max)
 
@@ -77,5 +78,5 @@ The default OpenMP thread count can result in severely degraded throughput, like
 - `--quant=q2_k` specifies model weight quantization using the 2-bit llama.cpp [K-quantization scheme](https://github.com/ggml-org/llama.cpp/pull/1684), which uses a two-level hierarchy of blocks and super-blocks to store scales and biases for ranges of weights.
 - The models have a tendency to repeat themselves and get into infinite loops at lower temperatures. In my testing, a temperature of ~1.0 avoids this failure mode but also keeps the models reasonably grounded.
 - Some new, optional architectural features (e.g. the `noaux_tc` method of expert selection) of DeepSeek V3 have not yet been implemented, so the model accuracy may be lower than the reference model.
-- You will need ~650GB of memory to run DeepSeek V3 in F8E5M2, or 206GB for 2-bit Q2_K. For best performance, this should be physical RAM, but most operating systems will also automatically supplement this with swap space (storing some memory on disk and some in RAM) at the cost of severely degraded token throughput. More aggressive quantization methods such as [1.58-bit](https://unsloth.ai/blog/deepseekr1-dynamic) are planned.
+- You will need ~650GB of memory to run DeepSeek V3 in F8E5M2, or 206GB for 2-bit Q2_K. For best performance, you should ensure there is enough physical RAM available and run as `sudo` with `-L` to force weights to stay in RAM, but otherwise, most operating systems will also automatically supplement this with swap space (storing some memory on disk and some in RAM) at the cost of severely degraded token throughput. More aggressive quantization methods such as [1.58-bit](https://unsloth.ai/blog/deepseekr1-dynamic) are planned.
 - Only decoding (e.g. incremental, iterative generation or reading of one token at a time) has been implemented. Prefills (reading a batch of prompt tokens in a single pass) have not been implemented, nor prefill-based optimizations for the decoding phase such as speculative decoding or multi-token prediction. Finally, multi-latent attention is implemented in the naive way as described in the DeepSeek-V2 paper rather than the optimized way. I have limited time to implement these optimizations as this is a side project for me, but PRs are welcome!

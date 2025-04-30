@@ -20,6 +20,7 @@ void error_usage() {
   fprintf(stderr, "Example: main model_weights_dir/ -i \"Q: What is the meaning of life?\"\n");
   fprintf(stderr, "Options:\n");
   fprintf(stderr, "  -h Display this help message\n");
+  fprintf(stderr, "  -L Locks model weights to RAM, disabling swap. Requires sudo.\n");
   fprintf(stderr, "  -m [completion,passkey,perplexity] which mode to run in (default - completion)\n");
   fprintf(stderr, "  -T <int> sliding window context length (0 - max)\n");
   fprintf(stderr, "\n");
@@ -44,10 +45,11 @@ void run_completion(
   const std::string& prompt,
   const int context,
   int num_steps,
-  float temperature
+  float temperature,
+  bool lock_model_weights
 ) {
   YALMData model_data;
-  model_data.from_directory(checkpoint_dir);
+  model_data.from_directory(checkpoint_dir, lock_model_weights);
   Model model(model_data, context);
   InferenceState state(model.config);
   Sampler sampler(model.config, get_timestamp_ms());
@@ -63,9 +65,11 @@ void run_completion(
 
   {
     ProfileDisabledScope profile_disabled;
+    std::cout << "Running warmup..." << std::endl;
     // Do one inference as warmup.
     // On CPU, this ensures all tensors are loaded into memory via mmap.
     model.forward(state, 0, 0);
+    std::cout << "Warmup complete" << std::endl;
   }
 
   std::vector<int> encoding;
@@ -132,19 +136,22 @@ void run_completion(
     elapsed_s
   ) << std::endl;
 
+#if PROFILE_ENABLED
   std::cout << "Profile total times (sec): " << std::endl;
   for (const auto& [key, value] : profile_times()) {
     std::cout << key << ": " << value << std::endl;
   }
+#endif
 }
 
 void run_perplexity(
   const std::string& checkpoint_dir,
   const std::string& prompt,
-  const int context
+  const int context,
+  bool lock_model_weights
 ) {
   YALMData model_data;
-  model_data.from_directory(checkpoint_dir);
+  model_data.from_directory(checkpoint_dir, lock_model_weights);
   Model model(model_data, context);
   InferenceState state(model.config);
   Sampler sampler(model.config, get_timestamp_ms());
@@ -154,9 +161,11 @@ void run_perplexity(
 
   {
     ProfileDisabledScope profile_disabled;
+    std::cout << "Running warmup..." << std::endl;
     // Do one inference as warmup.
     // On CPU, this ensures all tensors are loaded into memory via mmap.
     model.forward(state, 0, 0);
+    std::cout << "Warmup complete" << std::endl;
   }
 
   std::vector<int> encoding;
@@ -223,10 +232,11 @@ void run_passkey(
   const std::string& checkpoint_dir,
   const int context,
   const int n_junk,
-  const int passkey_pos
+  const int passkey_pos,
+  bool lock_model_weights
 ) {
   YALMData model_data;
-  model_data.from_directory(checkpoint_dir);
+  model_data.from_directory(checkpoint_dir, lock_model_weights);
   Model model(model_data, context);
   InferenceState state(model.config);
   Sampler sampler(model.config, get_timestamp_ms());
@@ -310,6 +320,7 @@ int main(int argc, char* argv[]) {
   std::string prompt = "";             // prompt string
   std::string prompt_path = "";        // prompt file path
   int context = 0;
+  bool lock_model_weights = false;
   // Completion mode options
   int num_steps = 256;                 // number of steps to run for
   float temperature = 1.0;             // temperature
@@ -337,6 +348,9 @@ int main(int argc, char* argv[]) {
     // read in the args
     if (argv[i][1] == 'h') {
       error_usage();
+    } else if (argv[i][1] == 'L') {
+      lock_model_weights = true;
+      i += 1;
     } else if (argv[i][1] == 'm') {
       if (i + 1 >= argc) {
         error_usage();
@@ -417,11 +431,11 @@ int main(int argc, char* argv[]) {
   }
 
   if (mode == "completion") {
-    run_completion(checkpoint_dir, prompt, context, num_steps, temperature);
+    run_completion(checkpoint_dir, prompt, context, num_steps, temperature, lock_model_weights);
   } else if (mode == "passkey") {
-    run_passkey(checkpoint_dir, context, n_junk, passkey_pos);
+    run_passkey(checkpoint_dir, context, n_junk, passkey_pos, lock_model_weights);
   } else if (mode == "perplexity") {
-    run_perplexity(checkpoint_dir, prompt, context);
+    run_perplexity(checkpoint_dir, prompt, context, lock_model_weights);
   }
 
   return 0;
