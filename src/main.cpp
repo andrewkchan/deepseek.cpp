@@ -10,6 +10,7 @@
 
 #include "codec.h"
 #include "model.h"
+#include "profile.h"
 #include "sampler.h"
 #include "time_utils.h"
 #include "tokenizer.h"
@@ -59,9 +60,12 @@ void run_completion(
     num_steps = model.config->max_seq_len;
   }
 
-  // Do one inference as warmup.
-  // On CPU, this ensures all tensors are loaded into memory via mmap.
-  model.forward(state, 0, 0);
+  {
+    ProfileDisabledGuard profile_disabled;
+    // Do one inference as warmup.
+    // On CPU, this ensures all tensors are loaded into memory via mmap.
+    model.forward(state, 0, 0);
+  }
 
   std::vector<int> encoding;
   {
@@ -124,6 +128,11 @@ void run_completion(
     ((double)read_bytes / 1e9) / elapsed_s,
     elapsed_s
   ) << std::endl;
+
+  std::cout << "Profile total times (sec): " << std::endl;
+  for (const auto& [key, value] : profile_times()) {
+    std::cout << key << ": " << value << std::endl;
+  }
 }
 
 void run_perplexity(
@@ -140,9 +149,12 @@ void run_perplexity(
 
   std::cout << "Model active bytes with full context window: " << model.config->active_bytes(model.config->max_seq_len) << std::endl;
 
-  // Do one inference as warmup.
-  // On CPU, this ensures all tensors are loaded into memory via mmap.
-  model.forward(state, 0, 0);
+  {
+    ProfileDisabledGuard profile_disabled;
+    // Do one inference as warmup.
+    // On CPU, this ensures all tensors are loaded into memory via mmap.
+    model.forward(state, 0, 0);
+  }
 
   std::vector<int> encoding;
   {
