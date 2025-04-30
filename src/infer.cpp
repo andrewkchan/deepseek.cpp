@@ -729,8 +729,22 @@ void Block::_block_cpu(
       }
     }
 
+    // Uncompress latent kvs output by each attention head, storing result in `kv_b`.
+    // This is a batched matmul of the latent kvs with the weight tensor.
+    for (int h = 0; h < c.n_heads; h++) {
+      float* v_b_head = s.kv_b() + h * c.v_head_dim;
+      size_t v_b_head_size = c.v_head_dim * c.kv_lora_rank;
+      size_t v_b_head_offset = v_b_head_size * h;
+      if (c.weight_quant == Quant::Q2_K) {
+        // In Q2_K, each element of the weight tensor is a block of QK_K elements
+        v_b_head_offset = v_b_head_offset / QK_K;
+      }
+      T* wv_b_head = wv_b<T>() + v_b_head_offset;
+      PROFILE(matmul(v_b_head, s.xb2(h, c.kv_lora_rank), wv_b_head, c.kv_lora_rank, c.v_head_dim, c.block_size.data(), _sv_b, s.aqb()));
+    }
+
     // final matmul to get output of the attention, using `hb` as temp storage
-    PROFILE(matmul(s.hb(), s.xb2(), wov<T>(), c.n_heads * c.kv_lora_rank, c.dim, c.block_size.data(), _sov, s.aqb()));
+    PROFILE(matmul(s.hb(), s.kv_b(), wo<T>(), c.n_kv_heads * c.v_head_dim, c.dim, c.block_size.data(), _so, s.aqb()));
   } else {
     PROFILE_BLOCK(attn_mha);
     int q_dim = c.n_heads * c.head_dim;
