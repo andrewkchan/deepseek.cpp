@@ -166,7 +166,13 @@ int YALMData::update_from_file(const std::string& filename, bool read_metadata, 
   }
   
   size_t size = st.st_size;
-  void* data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_POPULATE, fd, 0);
+  int mmap_flags = MAP_PRIVATE;
+  if (lock_model_weights) {
+    // Eagerly load memory-mapped file into memory.
+    // This ensures the mlock call later is locking memory already in RAM.
+    mmap_flags |= MAP_POPULATE;
+  }
+  void* data = mmap(NULL, size, PROT_READ | PROT_WRITE, mmap_flags, fd, 0);
   if (data == MAP_FAILED) {
     close(fd);
     return -1;
