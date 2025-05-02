@@ -170,9 +170,106 @@ private:
   uint8_t* _aqb = nullptr; // buffer for quantized activations
 };
 
-/* Transformer Block */
+/* Transformer Block Base */
 struct Block {
   Block(
+    int layer_i,
+    const std::shared_ptr<Config> config,
+    const Tensor* rms_att_weight,
+    const Tensor* rms_ffn_weight,
+    const Tensor* w1,
+    const Tensor* s1,
+    const Tensor* w2,
+    const Tensor* s2,
+    const Tensor* w3,
+    const Tensor* s3,
+    const Tensor* shared_w1,
+    const Tensor* shared_s1,
+    const Tensor* shared_w2,
+    const Tensor* shared_s2,
+    const Tensor* shared_w3,
+    const Tensor* shared_s3,
+    const Tensor* moegate,
+    const Tensor* moegate_bias
+  );
+  virtual ~Block();
+
+  float* rms_att_weight() const { return _rms_att_weight; }
+  float* rms_ffn_weight() const { return _rms_ffn_weight; }
+  template <typename T>
+  T* w1() const { return static_cast<T*>(_w1); }
+  template <typename T>
+  T* w2() const { return static_cast<T*>(_w2); }
+  template <typename T>
+  T* w3() const { return static_cast<T*>(_w3); }
+  float* moegate() const { return _moegate; }
+  template <typename T>
+  T* shared_w1() const { return static_cast<T*>(_shared_w1); }
+  template <typename T>
+  T* shared_w2() const { return static_cast<T*>(_shared_w2); }
+  template <typename T>
+  T* shared_w3() const { return static_cast<T*>(_shared_w3); }
+
+  // Compute forward pass for this block and update the inference state accordingly.
+  // PRECONDITIONS:
+  // - `s.x()` contains the input to the block. Output will also go here.
+  // - Block KV cache is hydrated.
+  void block(
+    InferenceState& s,  // inference state
+    int pos,            // index of the current token in the sequence
+    int kv_sink,        // number of sink tokens currently in the KV cache
+    int kv_pos,         // index of the current token in the kv cache, must be in [0..kv_len) since kv cache is a ring buffer
+    int kv_len          // number of tokens in the kv cache that we will attend over
+  ) const;
+
+protected:
+  virtual void attention_impl(
+    InferenceState& s,  // inference state
+    int pos,            // index of the current token in the sequence
+    int kv_sink,        // number of sink tokens currently in the KV cache
+    int kv_pos,         // index of the current token in the kv cache, must be in [0..kv_len) since kv cache is a ring buffer
+    int kv_len          // number of tokens in the kv cache that we will attend over
+  ) const = 0;
+
+  template <typename T>
+  void _block_cpu(
+    InferenceState& s,  // inference state
+    int pos,            // index of the current token in the sequence
+    int kv_sink,        // number of sink tokens currently in the KV cache
+    int kv_pos,         // index of the current token in the kv cache, must be in [0..kv_len) since kv cache is a ring buffer
+    int kv_len          // number of tokens in the kv cache that we will attend over
+  ) const;
+
+  int _layer_i = 0;
+
+  std::shared_ptr<Config> _config;
+  Device _device = Device::CPU;
+
+  // weights for norms
+  float* _rms_att_weight = nullptr; // (dim) rmsnorm weights for attention input
+  float* _rms_ffn_weight = nullptr; // (dim) rmsnorm weights for ffn input
+
+  // weights for ffn
+  void* _w1 = nullptr; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
+  float* _s1 = nullptr;
+  void* _w2 = nullptr; // (n_routed_experts?, dim, moe_intermediate_size) or (dim, hidden_dim)
+  float* _s2 = nullptr;
+  void* _w3 = nullptr; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
+  float* _s3 = nullptr;
+  void* _shared_w1 = nullptr; // (n_shared_experts?, moe_intermediate_size, dim)
+  float* _shared_s1 = nullptr;
+  void* _shared_w2 = nullptr; // (n_shared_experts?, dim, moe_intermediate_size)
+  float* _shared_s2 = nullptr;
+  void* _shared_w3 = nullptr; // (n_shared_experts?, moe_intermediate_size, dim)
+  float* _shared_s3 = nullptr;
+  // weights for mixture of experts router if present
+  float* _moegate = nullptr; // (n_routed_experts?, dim)
+  float* _moegate_bias = nullptr;
+};
+
+/* Transformer Block - Multi-Head Attention */
+struct BlockMHA : public Block {
+  BlockMHA(
     int layer_i,
     const std::shared_ptr<Config> config,
     const Tensor* rms_att_weight,
@@ -189,6 +286,94 @@ struct Block {
     const Tensor* sq_b,
     const Tensor* wkv_b,
     const Tensor* skv_b,
+    const Tensor* wo,
+    const Tensor* so,
+    const Tensor* w1,
+    const Tensor* s1,
+    const Tensor* w2,
+    const Tensor* s2,
+    const Tensor* w3,
+    const Tensor* s3,
+    const Tensor* shared_w1,
+    const Tensor* shared_s1,
+    const Tensor* shared_w2,
+    const Tensor* shared_s2,
+    const Tensor* shared_w3,
+    const Tensor* shared_s3,
+    const Tensor* moegate,
+    const Tensor* moegate_bias
+  );
+  ~BlockMHA() override;
+
+  float* rms_q_a_weight() const { return _rms_q_a_weight; }
+  float* rms_kv_a_weight() const { return _rms_kv_a_weight; }
+  template <typename T>
+  T* wq() const { return static_cast<T*>(_wq); }
+  template <typename T>
+  T* wq_a() const { return static_cast<T*>(_wq_a); }
+  template <typename T>
+  T* wq_b() const { return static_cast<T*>(_wq_b); }
+  template <typename T>
+  T* wkv_a() const { return static_cast<T*>(_wkv_a); }
+  template <typename T>
+  T* wkv_b() const { return static_cast<T*>(_wkv_b); }
+  template <typename T>
+  T* wo() const { return static_cast<T*>(_wo); }
+  f16_t* key_cache() const { return _key_cache; }
+  f16_t* key_cache(int pos) const { return _key_cache + pos * _config->head_dim * _config->n_kv_heads; }
+  f16_t* value_cache() const { return _value_cache; }
+  f16_t* value_cache(int pos) const { return _value_cache + pos * _config->v_head_dim * _config->n_kv_heads; }
+
+protected:
+  void attention_impl(
+    InferenceState& s, int pos, int kv_sink, int kv_pos, int kv_len
+  ) const override;
+
+private:
+  template <typename T>
+  void _attention_impl(
+    InferenceState& s,  // inference state
+    int pos,            // index of the current token in the sequence
+    int kv_sink,        // number of sink tokens currently in the KV cache
+    int kv_pos,         // index of the current token in the kv cache, must be in [0..kv_len) since kv cache is a ring buffer
+    int kv_len          // number of tokens in the kv cache that we will attend over
+  ) const;
+
+  float* _rms_q_a_weight = nullptr; // (q_lora_rank) rmsnorm weights
+  float* _rms_kv_a_weight = nullptr; // (kv_lora_rank + qk_rope_head_dim)
+
+  // weights for self-attention matmuls
+  void* _wq = nullptr; // (n_heads * head_dim, dim)
+  float* _sq = nullptr;
+  void* _wq_a = nullptr; // (q_lora_rank, dim)
+  float* _sq_a = nullptr;
+  void* _wkv_a = nullptr; // (kv_lora_rank + qk_rope_head_dim, dim)
+  float* _skv_a = nullptr;
+  void* _wo = nullptr; // (dim, n_heads * v_head_dim)
+  float* _so = nullptr;
+  void* _wq_b = nullptr; // (n_heads * head_dim, q_lora_rank)
+  float* _sq_b = nullptr;
+  void* _wkv_b = nullptr; // (n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim), kv_lora_rank)
+  float* _skv_b = nullptr;
+
+  // MHA kv cache
+  f16_t* _key_cache = nullptr;   // (seq_len, n_kv_heads * head_dim)
+  f16_t* _value_cache = nullptr; // (seq_len, n_kv_heads * v_head_dim)
+};
+
+/* Transformer Block - Multi-Latent Attention */
+struct BlockMLA : public Block {
+  BlockMLA(
+    int layer_i,
+    const std::shared_ptr<Config> config,
+    const Tensor* rms_att_weight,
+    const Tensor* rms_q_a_weight,
+    const Tensor* rms_kv_a_weight,
+    const Tensor* rms_ffn_weight,
+    const Tensor* wq_a,
+    const Tensor* sq_a,
+    const Tensor* wkv_a,
+    const Tensor* skv_a,
     const Tensor* wo,
     const Tensor* so,
     const Tensor* wc,
@@ -212,22 +397,14 @@ struct Block {
     const Tensor* moegate,
     const Tensor* moegate_bias
   );
-  ~Block();
+  ~BlockMLA() override;
 
-  float* rms_att_weight() const { return _rms_att_weight; }
-  float* rms_ffn_weight() const { return _rms_ffn_weight; }
   float* rms_q_a_weight() const { return _rms_q_a_weight; }
   float* rms_kv_a_weight() const { return _rms_kv_a_weight; }
   template <typename T>
-  T* wq() const { return static_cast<T*>(_wq); }
-  template <typename T>
   T* wq_a() const { return static_cast<T*>(_wq_a); }
   template <typename T>
-  T* wq_b() const { return static_cast<T*>(_wq_b); }
-  template <typename T>
   T* wkv_a() const { return static_cast<T*>(_wkv_a); }
-  template <typename T>
-  T* wkv_b() const { return static_cast<T*>(_wkv_b); }
   template <typename T>
   T* wo() const { return static_cast<T*>(_wo); }
   template <typename T>
@@ -236,43 +413,18 @@ struct Block {
   T* wq_rope_b() const { return static_cast<T*>(_wq_rope_b); }
   template <typename T>
   T* wv_b() const { return static_cast<T*>(_wv_b); }
-  template <typename T>
-  T* w1() const { return static_cast<T*>(_w1); }
-  template <typename T>
-  T* w2() const { return static_cast<T*>(_w2); }
-  template <typename T>
-  T* w3() const { return static_cast<T*>(_w3); }
-  float* moegate() const { return _moegate; }
-  template <typename T>
-  T* shared_w1() const { return static_cast<T*>(_shared_w1); }
-  template <typename T>
-  T* shared_w2() const { return static_cast<T*>(_shared_w2); }
-  template <typename T>
-  T* shared_w3() const { return static_cast<T*>(_shared_w3); }
-  f16_t* key_cache() const { return _key_cache; }
-  f16_t* key_cache(int pos) const { return _key_cache + pos * _config->head_dim * _config->n_kv_heads; }
-  f16_t* value_cache() const { return _value_cache; }
-  f16_t* value_cache(int pos) const { return _value_cache + pos * _config->v_head_dim * _config->n_kv_heads; }
   f16_t* kv_nope_cache() const { return _kv_nope_cache; }
   f16_t* kv_nope_cache(int pos) const { return _kv_nope_cache + pos * _config->kv_lora_rank; }
   f16_t* kv_rope_cache() const { return _kv_rope_cache; }
   f16_t* kv_rope_cache(int pos) const { return _kv_rope_cache + pos * _config->qk_rope_head_dim; }
 
-  // Compute forward pass for this block and update the inference state accordingly.
-  // PRECONDITIONS: 
-  // - `s.x()` contains the input to the block. Output will also go here.
-  // - Block KV cache is hydrated.
-  void block(
-    InferenceState& s,  // inference state
-    int pos,            // index of the current token in the sequence
-    int kv_sink,        // number of sink tokens currently in the KV cache
-    int kv_pos,         // index of the current token in the kv cache, must be in [0..kv_len) since kv cache is a ring buffer
-    int kv_len          // number of tokens in the kv cache that we will attend over
-  ) const;
-
+protected:
+  void attention_impl(
+    InferenceState& s, int pos, int kv_sink, int kv_pos, int kv_len
+  ) const override;
 private:
   template <typename T>
-  void _block_cpu(
+  void _attention_impl(
     InferenceState& s,  // inference state
     int pos,            // index of the current token in the sequence
     int kv_sink,        // number of sink tokens currently in the KV cache
@@ -280,32 +432,17 @@ private:
     int kv_len          // number of tokens in the kv cache that we will attend over
   ) const;
 
-  int _layer_i = 0;
-
-  std::shared_ptr<Config> _config;
-  Device _device = Device::CPU;
-
   // weights for norms
-  float* _rms_att_weight = nullptr; // (dim) rmsnorm weights
   float* _rms_q_a_weight = nullptr; // (q_lora_rank) rmsnorm weights
   float* _rms_kv_a_weight = nullptr; // (kv_lora_rank + qk_rope_head_dim)
-  float* _rms_ffn_weight = nullptr; // (dim)
 
   // weights for self-attention matmuls
-  void* _wq = nullptr; // (n_heads * head_dim, dim)
-  float* _sq = nullptr;
   void* _wq_a = nullptr; // (q_lora_rank, dim)
   float* _sq_a = nullptr;
   void* _wkv_a = nullptr; // (kv_lora_rank + qk_rope_head_dim, dim)
   float* _skv_a = nullptr;
   void* _wo = nullptr; // (dim, n_heads * v_head_dim)
   float* _so = nullptr;
-  // Naive (MHA) only
-  void* _wq_b = nullptr; // (n_heads * head_dim, q_lora_rank)
-  float* _sq_b = nullptr;
-  void* _wkv_b = nullptr; // (n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim), kv_lora_rank)
-  float* _skv_b = nullptr;
-  // MLA only
   void* _wc = nullptr; // (n_heads * kv_lora_rank, q_lora_rank)
   float* _sc = nullptr;
   void* _wq_rope_b = nullptr; // (n_heads * qk_rope_head_dim, q_lora_rank)
@@ -313,27 +450,7 @@ private:
   void* _wv_b = nullptr; // (n_heads * v_head_dim, kv_lora_rank)
   float* _sv_b = nullptr;
 
-  // weights for ffn
-  void* _w1 = nullptr; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
-  float* _s1 = nullptr;
-  void* _w2 = nullptr; // (n_routed_experts?, dim, moe_intermediate_size) or (dim, hidden_dim)
-  float* _s2 = nullptr;
-  void* _w3 = nullptr; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
-  float* _s3 = nullptr;
-  void* _shared_w1 = nullptr; // (n_shared_experts?, moe_intermediate_size, dim)
-  float* _shared_s1 = nullptr;
-  void* _shared_w2 = nullptr; // (n_shared_experts?, dim, moe_intermediate_size)
-  float* _shared_s2 = nullptr;
-  void* _shared_w3 = nullptr; // (n_shared_experts?, moe_intermediate_size, dim)
-  float* _shared_s3 = nullptr;
-  // weights for mixture of experts router if present
-  float* _moegate = nullptr; // (n_routed_experts?, dim)
-  float* _moegate_bias = nullptr;
-
-  // kv cache
-  f16_t* _key_cache = nullptr;   // (seq_len, n_kv_heads * head_dim)
-  f16_t* _value_cache = nullptr; // (seq_len, n_kv_heads * v_head_dim)
-  // MLA only
+  // MLA kv cache
   f16_t* _kv_nope_cache = nullptr; // (seq_len, kv_lora_rank)
   f16_t* _kv_rope_cache = nullptr; // (seq_len, qk_rope_head_dim)
 };

@@ -646,10 +646,9 @@ void Block::_block_cpu(
   int kv_pos,         // index of the current token in the kv cache, must be in [0..kv_len) since kv cache is a ring buffer
   int kv_len          // number of tokens in the kv cache that we will attend over
 ) const {
-  assert(_config);
   const Config& c = *_config;
 
-  // attention pre-norm
+  // Attention pre-norm
   switch (c.norm_type) {
     case LayerNormType::RMSNorm: {
       rmsnorm(s.xb(), s.x(), rms_att_weight(), c.dim, c.norm_eps);
@@ -657,213 +656,15 @@ void Block::_block_cpu(
     }
   }
 
-  if (c.use_mla) {
-    PROFILE_BLOCK(attn_mla);
-    assert(c.q_lora_rank > 0); // TODO: support MLA with q_lora_rank == 0 (DeepSeek V2 Lite)
-    // qkv down projections for this position
-    PROFILE(matmul(s.q_a(), s.xb(), wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a, s.aqb()));
-    switch (c.norm_type) {
-      case LayerNormType::RMSNorm: {
-        rmsnorm(s.q_a(), s.q_a(), rms_q_a_weight(), c.q_lora_rank, c.norm_eps);
-        break;
-      }
-    }
-    PROFILE(matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a, s.aqb()));
-    // query transformations
-    PROFILE(matmul(s.q_rope(), s.q_a(), wq_rope_b<T>(), c.q_lora_rank, c.n_heads * c.qk_rope_head_dim, c.block_size.data(), _sq_rope_b, s.aqb()));
-    PROFILE(matmul(s.q_c(), s.q_a(), wc<T>(), c.q_lora_rank, c.n_heads * c.kv_lora_rank, c.block_size.data(), _sc, s.aqb()));
-    // Apply RoPE positional encoding to the PE chunks of q and kv_a
-    bool is_v3 = c.has_moegate_bias;
-    for (int h = 0; h < c.n_heads; h++) {
-      if (is_v3) {
-        rope_v3(s.q_rope(h), c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
-      } else {
-        rope(s.ropebuf(), s.q_rope(h), c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
-      }
-    }
-    int kv_pe_offset = c.kv_lora_rank;
-    float* k_rope = s.kv_a() + kv_pe_offset;
-    if (is_v3) {
-      rope_v3(k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
-    } else {
-      rope(s.ropebuf(), k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
-    }
-    // rms norm to non-pe chunk of kv_a (compressed latent kv)
-    rmsnorm(s.kv_a(), s.kv_a(), rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
+  // Attention output into `hb`
+  attention_impl(s, pos, kv_sink, kv_pos, kv_len);
 
-    // update kv cache
-    for (int i = 0; i < c.kv_lora_rank; ++i) {
-      kv_nope_cache(kv_pos)[i] = float_to_half(s.kv_a()[i]);
-    }
-    for (int i = 0; i < c.qk_rope_head_dim; ++i) {
-      kv_rope_cache(kv_pos)[i] = float_to_half(k_rope[i]);
-    }
-
-    // Sink tokens remain untouched while the rest of the KV cache is incrementally 
-    // replaced in ring order, but sink i must always be positioned (max_seq_len - i)
-    // away from current timestep. Hence, each forward pass, rotate sink tokens 
-    // forward by 1. See https://arxiv.org/abs/2309.17453 for more.
-    for (int r = 0; r < kv_sink; r++) {
-      f16_t* kv = kv_rope_cache(r);
-      if (is_v3) {
-        rope_v3(kv, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
-      } else {
-        rope(s.ropebuf(), kv, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
-      }
-    }
-
-    {
-      PROFILE_BLOCK(self_attn_mla);
-      // Multi-latent attention. Iterate over all heads.
-      int h;
-    #pragma omp parallel for private(h)
-      for (h = 0; h < c.n_heads; h++) {
-        attn_mla(
-          s.xb2(h, c.kv_lora_rank), 
-          s.att(h), 
-          s.q_c(h), 
-          s.q_rope(h), 
-          kv_nope_cache(), 
-          kv_rope_cache(), 
-          c.head_dim, 
-          c.kv_lora_rank, 
-          c.qk_rope_head_dim, 
-          c.n_heads, 
-          kv_len
-        );
-      }
-    }
-
-    // Uncompress latent kvs output by each attention head, storing result in `kv_b`.
-    // This is a batched matmul of the latent kvs with the weight tensor.
-    for (int h = 0; h < c.n_heads; h++) {
-      float* v_b_head = s.kv_b() + h * c.v_head_dim;
-      size_t v_b_head_size = c.v_head_dim * c.kv_lora_rank;
-      size_t v_b_head_offset = v_b_head_size * h;
-      if (c.weight_quant == Quant::Q2_K) {
-        // In Q2_K, each element of the weight tensor is a block of QK_K elements
-        v_b_head_offset = v_b_head_offset / QK_K;
-      }
-      T* wv_b_head = wv_b<T>() + v_b_head_offset;
-      PROFILE(matmul(v_b_head, s.xb2(h, c.kv_lora_rank), wv_b_head, c.kv_lora_rank, c.v_head_dim, c.block_size.data(), _sv_b, s.aqb()));
-    }
-
-    // final matmul to get output of the attention, using `hb` as temp storage
-    PROFILE(matmul(s.hb(), s.kv_b(), wo<T>(), c.n_kv_heads * c.v_head_dim, c.dim, c.block_size.data(), _so, s.aqb()));
-  } else {
-    PROFILE_BLOCK(attn_mha);
-    int q_dim = c.n_heads * c.head_dim;
-
-    // qkv matmuls for this position
-    if (c.q_lora_rank > 0) {
-      PROFILE(matmul(s.q_a(), s.xb(), wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a, s.aqb()));
-      switch (c.norm_type) {
-        case LayerNormType::RMSNorm: {
-          rmsnorm(s.q_a(), s.q_a(), rms_q_a_weight(), c.q_lora_rank, c.norm_eps);
-          break;
-        }
-      }
-      PROFILE(matmul(s.q(), s.q_a(), wq_b<T>(), c.q_lora_rank, q_dim, c.block_size.data(), _sq_b, s.aqb()));
-    } else {
-      PROFILE(matmul(s.q(), s.xb(), wq<T>(), c.dim, q_dim, c.block_size.data(), _sq, s.aqb()));
-    }
-    PROFILE(matmul(s.kv_a(), s.xb(), wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a, s.aqb()));
-
-    // Apply RoPE positional encoding to the PE chunks of q and kv_a
-    int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
-    bool is_v3 = c.has_moegate_bias;
-    for (int h = 0; h < c.n_heads; h++) {
-      if (is_v3) {
-        rope_v3(s.q(h) + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
-      } else {
-        rope(s.ropebuf(), s.q(h) + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
-      }
-    }
-    int kv_pe_offset = c.kv_lora_rank;
-    float* k_rope = s.kv_a() + kv_pe_offset;
-    if (is_v3) {
-      rope_v3(k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
-    } else {
-      rope(s.ropebuf(), k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
-    }
-    // rms norm to non-pe chunk of kv_a (compressed latent kv)
-    rmsnorm(s.kv_a(), s.kv_a(), rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
-    // un-compress the latent kv via multiplication with wkv_b
-    int qk_nope_head_dim = c.head_dim - c.qk_rope_head_dim;
-    int uncompressed_kv_dim = c.n_kv_heads * (qk_nope_head_dim + c.v_head_dim);
-    PROFILE(matmul(s.kv_b(), s.kv_a(), wkv_b<T>(), c.kv_lora_rank, uncompressed_kv_dim, c.block_size.data(), _skv_b, s.aqb()));
-    // concatenate kv_b and k_rope in each head to build key heads
-    for (int h = 0; h < c.n_heads; h++) {
-      for (int i = 0; i < qk_nope_head_dim; i++) {
-        s.k(h)[i] = s.kv_b(h)[i];
-      }
-      for (int i = 0; i < c.qk_rope_head_dim; i++) {
-        s.k(h)[qk_nope_head_dim + i] = k_rope[i];
-      }
-    }
-    // transfer value heads from kv_b
-    for (int h = 0; h < c.n_heads; h++) {
-      for (int i = 0; i < c.v_head_dim; i++) {
-        s.v(h)[i] = s.kv_b(h)[qk_nope_head_dim + i];
-      }
-    }
-
-    // update kv cache
-    int key_dim = c.n_kv_heads * c.head_dim;
-    for (int i = 0; i < key_dim; ++i) {
-      key_cache(kv_pos)[i] = float_to_half(s.k()[i]);
-    }
-    int value_dim = c.n_kv_heads * c.v_head_dim;
-    for (int i = 0; i < value_dim; ++i) {
-      value_cache(kv_pos)[i] = float_to_half(s.v()[i]);
-    }
-
-    // Sink tokens remain untouched while the rest of the KV cache is incrementally 
-    // replaced in ring order, but sink i must always be positioned (max_seq_len - i)
-    // away from current timestep. Hence, each forward pass, rotate sink tokens 
-    // forward by 1. See https://arxiv.org/abs/2309.17453 for more.
-    for (int r = 0; r < kv_sink; r++) {
-      f16_t* key = key_cache(r);
-      // in-place update PE-chunk of each key head
-      int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
-      for (int h = 0; h < c.n_heads; h++) {
-        f16_t* kh = key + h * c.head_dim;
-        if (is_v3) {
-          rope_v3(kh + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
-        } else {
-          rope(s.ropebuf(), kh + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
-        }
-      }
-    }
-
-    {
-      PROFILE_BLOCK(self_attn_mha);
-      // Multihead attention. Iterate over all heads.
-      f16_t* kb = key_cache();
-      f16_t* vb = value_cache();
-      int q_per_kv_head = c.n_heads / c.n_kv_heads; // query heads per kv head (for MultiQueryAttention/GroupedQueryAttention)
-      int h;
-    #pragma omp parallel for private(h)
-      for (h = 0; h < c.n_heads; h++) {
-        int k_head_offset = (h / q_per_kv_head) * c.head_dim;
-        int v_head_offset = (h / q_per_kv_head) * c.v_head_dim;
-        f16_t* kh = kb + k_head_offset;
-        f16_t* vh = vb + v_head_offset;
-        attn(s.xb2(h, c.v_head_dim), s.att(h), s.q(h), kh, vh, c.head_dim, c.v_head_dim, c.n_kv_heads, kv_len);
-      }
-    }
-
-
-    // final matmul to get output of the attention, using `hb` as temp storage
-    PROFILE(matmul(s.hb(), s.xb2(), wo<T>(), c.n_kv_heads * c.v_head_dim, c.dim, c.block_size.data(), _so, s.aqb()));
-  }
-
-  // residual connection back into x
+  // Residual back into `x`
   for (int i = 0; i < c.dim; ++i) {
     s.x()[i] += s.hb()[i];
   }
-  
-  // ffn pre-norm
+
+  // FFN pre-norm
   switch (c.norm_type) {
     case LayerNormType::RMSNorm: {
       rmsnorm(s.xb(), s.x(), rms_ffn_weight(), c.dim, c.norm_eps);
@@ -971,6 +772,227 @@ void Block::_block_cpu(
   }
 }
 
+template<typename T>
+void BlockMHA::_attention_impl(
+  InferenceState& s, int pos, int kv_sink, int kv_pos, int kv_len
+) const {
+  PROFILE_BLOCK(attn_mha);
+  const Config& c = *_config;
+  int q_dim = c.n_heads * c.head_dim;
+
+  // qkv matmuls for this position
+  if (c.q_lora_rank > 0) {
+    PROFILE(matmul(s.q_a(), s.xb(), this->wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a, s.aqb()));
+    switch (c.norm_type) {
+      case LayerNormType::RMSNorm: {
+        rmsnorm(s.q_a(), s.q_a(), this->rms_q_a_weight(), c.q_lora_rank, c.norm_eps);
+        break;
+      }
+    }
+    PROFILE(matmul(s.q(), s.q_a(), this->wq_b<T>(), c.q_lora_rank, q_dim, c.block_size.data(), _sq_b, s.aqb()));
+  } else {
+    PROFILE(matmul(s.q(), s.xb(), this->wq<T>(), c.dim, q_dim, c.block_size.data(), _sq, s.aqb()));
+  }
+  PROFILE(matmul(s.kv_a(), s.xb(), this->wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a, s.aqb()));
+
+  // Apply RoPE positional encoding
+  int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
+  bool is_v3 = c.has_moegate_bias;
+  for (int h = 0; h < c.n_heads; h++) {
+    if (is_v3) {
+      rope_v3(s.q(h) + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+    } else {
+      rope(s.ropebuf(), s.q(h) + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+    }
+  }
+  int kv_pe_offset = c.kv_lora_rank;
+  float* k_rope = s.kv_a() + kv_pe_offset;
+  if (is_v3) {
+    rope_v3(k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+  } else {
+    rope(s.ropebuf(), k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+  }
+  // rms norm to non-pe chunk of kv_a
+  rmsnorm(s.kv_a(), s.kv_a(), this->rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
+  // un-compress the latent kv via multiplication with wkv_b
+  int qk_nope_head_dim = c.head_dim - c.qk_rope_head_dim;
+  int uncompressed_kv_dim = c.n_kv_heads * (qk_nope_head_dim + c.v_head_dim);
+  PROFILE(matmul(s.kv_b(), s.kv_a(), this->wkv_b<T>(), c.kv_lora_rank, uncompressed_kv_dim, c.block_size.data(), _skv_b, s.aqb()));
+  // concatenate kv_b and k_rope in each head to build key heads
+  for (int h = 0; h < c.n_heads; h++) {
+    for (int i = 0; i < qk_nope_head_dim; i++) {
+      s.k(h)[i] = s.kv_b(h)[i];
+    }
+    for (int i = 0; i < c.qk_rope_head_dim; i++) {
+      s.k(h)[qk_nope_head_dim + i] = k_rope[i];
+    }
+  }
+  // transfer value heads from kv_b
+  for (int h = 0; h < c.n_heads; h++) {
+    for (int i = 0; i < c.v_head_dim; i++) {
+      s.v(h)[i] = s.kv_b(h)[qk_nope_head_dim + i];
+    }
+  }
+
+  // update kv cache
+  int key_dim = c.n_kv_heads * c.head_dim;
+  for (int i = 0; i < key_dim; ++i) {
+    this->key_cache(kv_pos)[i] = float_to_half(s.k()[i]);
+  }
+  int value_dim = c.n_kv_heads * c.v_head_dim;
+  for (int i = 0; i < value_dim; ++i) {
+    this->value_cache(kv_pos)[i] = float_to_half(s.v()[i]);
+  }
+
+  // Sink tokens remain untouched while the rest of the KV cache is incrementally 
+  // replaced in ring order, but sink i must always be positioned (max_seq_len - i)
+  // away from current timestep. Hence, each forward pass, rotate sink tokens 
+  // forward by 1. See https://arxiv.org/abs/2309.17453 for more.
+  for (int r = 0; r < kv_sink; r++) {
+    f16_t* key = key_cache(r);
+    // in-place update PE-chunk of each key head
+    int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
+    for (int h = 0; h < c.n_heads; h++) {
+      f16_t* kh = key + h * c.head_dim;
+      if (is_v3) {
+        rope_v3(kh + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+      } else {
+        rope(s.ropebuf(), kh + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+      }
+    }
+  }
+
+  {
+    PROFILE_BLOCK(self_attn_mha_inner);
+    f16_t* kb = this->key_cache();
+    f16_t* vb = this->value_cache();
+    int q_per_kv_head = c.n_heads / c.n_kv_heads;
+    int h;
+  #pragma omp parallel for private(h)
+    for (h = 0; h < c.n_heads; h++) {
+      int kv_head_idx = h / q_per_kv_head;
+      int k_head_offset = kv_head_idx * c.head_dim;
+      int v_head_offset = kv_head_idx * c.v_head_dim;
+      f16_t* kh = kb + k_head_offset; // Use pointer arithmetic for base address
+      f16_t* vh = vb + v_head_offset; // Use pointer arithmetic for base address
+      attn(
+        s.xb2(h, c.v_head_dim), // Output per Q head
+        s.att(h),              // Attention scores per Q head
+        s.q(h),                // Query vector for this head
+        kh,                    // Pointer to start of relevant K cache base
+        vh,                    // Pointer to start of relevant V cache base
+        c.head_dim,            // Dimension of K space
+        c.v_head_dim,          // Dimension of V space
+        c.n_kv_heads,          // Total number of KV heads (passed to inner attn func for stride calculation)
+        kv_len                 // Sequence length to attend over
+      );
+    }
+  }
+
+  // final matmul to get output of the attention, place result in s.hb() for residual connection
+  PROFILE(matmul(s.hb(), s.xb2(), this->wo<T>(), c.n_heads * c.v_head_dim, c.dim, c.block_size.data(), _so, s.aqb()));
+}
+
+template<typename T>
+void BlockMLA::_attention_impl(
+  InferenceState& s, int pos, int kv_sink, int kv_pos, int kv_len
+) const {
+  PROFILE_BLOCK(attn_mla);
+  const Config& c = *_config;
+  assert(c.q_lora_rank > 0); // MLA requires q_lora_rank > 0
+
+  // qkv down projections
+  PROFILE(matmul(s.q_a(), s.xb(), this->wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a, s.aqb()));
+  switch (c.norm_type) {
+    case LayerNormType::RMSNorm: {
+      rmsnorm(s.q_a(), s.q_a(), this->rms_q_a_weight(), c.q_lora_rank, c.norm_eps);
+      break;
+    }
+  }
+  PROFILE(matmul(s.kv_a(), s.xb(), this->wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a, s.aqb()));
+  // query transformations
+  PROFILE(matmul(s.q_rope(), s.q_a(), this->wq_rope_b<T>(), c.q_lora_rank, c.n_heads * c.qk_rope_head_dim, c.block_size.data(), _sq_rope_b, s.aqb()));
+  PROFILE(matmul(s.q_c(), s.q_a(), this->wc<T>(), c.q_lora_rank, c.n_heads * c.kv_lora_rank, c.block_size.data(), _sc, s.aqb()));
+
+  // Apply RoPE positional encoding
+  bool is_v3 = c.has_moegate_bias;
+  for (int h = 0; h < c.n_heads; h++) {
+    if (is_v3) {
+      rope_v3(s.q_rope(h), c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+    } else {
+      rope(s.ropebuf(), s.q_rope(h), c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+    }
+  }
+  int kv_pe_offset = c.kv_lora_rank;
+  float* k_rope = s.kv_a() + kv_pe_offset;
+  if (is_v3) {
+    rope_v3(k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+  } else {
+    rope(s.ropebuf(), k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+  }
+  // rms norm to non-pe chunk of kv_a (compressed latent kv)
+  rmsnorm(s.kv_a(), s.kv_a(), this->rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
+
+  // update kv cache
+  for (int i = 0; i < c.kv_lora_rank; ++i) {
+    this->kv_nope_cache(kv_pos)[i] = float_to_half(s.kv_a()[i]);
+  }
+  for (int i = 0; i < c.qk_rope_head_dim; ++i) {
+    this->kv_rope_cache(kv_pos)[i] = float_to_half(k_rope[i]);
+  }
+
+  // Sink tokens remain untouched while the rest of the KV cache is incrementally 
+  // replaced in ring order, but sink i must always be positioned (max_seq_len - i)
+  // away from current timestep. Hence, each forward pass, rotate sink tokens 
+  // forward by 1. See https://arxiv.org/abs/2309.17453 for more.
+  for (int r = 0; r < kv_sink; r++) {
+    f16_t* kv = this->kv_rope_cache(r);
+    if (is_v3) {
+      rope_v3(kv, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+    } else {
+      rope(s.ropebuf(), kv, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+    }
+  }
+
+  {
+    PROFILE_BLOCK(self_attn_mla_inner);
+    int h;
+  #pragma omp parallel for private(h)
+    for (h = 0; h < c.n_heads; h++) {
+      attn_mla(
+        s.xb2(h, c.kv_lora_rank), // Output is per-head latent vector
+        s.att(h),
+        s.q_c(h),
+        s.q_rope(h),
+        this->kv_nope_cache(),
+        this->kv_rope_cache(),
+        c.head_dim,
+        c.kv_lora_rank,
+        c.qk_rope_head_dim,
+        c.n_heads, // n_heads is needed? attn_mla doesn't use it currently. Check attn_mla.
+        kv_len
+      );
+    }
+  }
+
+  // Uncompress latent kvs output by each attention head, storing result in `kv_b`.
+  // We reuse kv_b buffer here for the uncompressed value outputs.
+  for (int h = 0; h < c.n_heads; h++) {
+    float* v_b_head = s.kv_b() + h * c.v_head_dim;
+    size_t v_b_head_size = c.v_head_dim * c.kv_lora_rank;
+    size_t v_b_head_offset = v_b_head_size * h;
+    if (c.weight_quant == Quant::Q2_K) {
+      // In Q2_K, each element of the weight tensor is a block of QK_K elements
+      v_b_head_offset = v_b_head_offset / QK_K;
+    }
+    T* wv_b_head = wv_b<T>() + v_b_head_offset;
+    PROFILE(matmul(v_b_head, s.xb2(h, c.kv_lora_rank), wv_b_head, c.kv_lora_rank, c.v_head_dim, c.block_size.data(), _sv_b, s.aqb()));
+  }
+
+  // final matmul to get output of the attention, place result in s.hb() for residual connection
+  PROFILE(matmul(s.hb(), s.kv_b(), this->wo<T>(), c.n_heads * c.v_head_dim, c.dim, c.block_size.data(), _so, s.aqb()));
+}
+
 void mha_cpu(
   float* xout,  // (n_heads, head_dim)
   float* att,   // (n_heads, max_seq_len)
@@ -1042,6 +1064,16 @@ template void Block::_block_cpu<float>(InferenceState&, int, int, int, int) cons
 template void Block::_block_cpu<f16_t>(InferenceState&, int, int, int, int) const;
 template void Block::_block_cpu<f8e5m2_t>(InferenceState&, int, int, int, int) const;
 template void Block::_block_cpu<block_q2_K>(InferenceState&, int, int, int, int) const;
+
+template void BlockMHA::_attention_impl<float>(InferenceState&, int, int, int, int) const;
+template void BlockMHA::_attention_impl<f16_t>(InferenceState&, int, int, int, int) const;
+template void BlockMHA::_attention_impl<f8e5m2_t>(InferenceState&, int, int, int, int) const;
+template void BlockMHA::_attention_impl<block_q2_K>(InferenceState&, int, int, int, int) const;
+
+template void BlockMLA::_attention_impl<float>(InferenceState&, int, int, int, int) const;
+template void BlockMLA::_attention_impl<f16_t>(InferenceState&, int, int, int, int) const;
+template void BlockMLA::_attention_impl<f8e5m2_t>(InferenceState&, int, int, int, int) const;
+template void BlockMLA::_attention_impl<block_q2_K>(InferenceState&, int, int, int, int) const;
 
 void Model::_copy_embedding(InferenceState& s, int token) {
   const Config& c = *config;

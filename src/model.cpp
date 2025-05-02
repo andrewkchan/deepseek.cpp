@@ -242,6 +242,179 @@ Block::Block(
   int layer_i,
   const std::shared_ptr<Config> config,
   const Tensor* rms_att_weight,
+  const Tensor* rms_ffn_weight,
+  const Tensor* w1,
+  const Tensor* s1,
+  const Tensor* w2,
+  const Tensor* s2,
+  const Tensor* w3,
+  const Tensor* s3,
+  const Tensor* shared_w1,
+  const Tensor* shared_s1,
+  const Tensor* shared_w2,
+  const Tensor* shared_s2,
+  const Tensor* shared_w3,
+  const Tensor* shared_s3,
+  const Tensor* moegate,
+  const Tensor* moegate_bias
+) : _layer_i(layer_i), _config(config) {
+  switch (config->weight_quant) {
+    case Quant::F32:
+    case Quant::F16:
+    case Quant::F8E5M2:
+    case Quant::Q2_K: {
+      break;
+    }
+    default: {
+      std::cerr << "FATAL: unsupported weight quantization: " << quant_to_string(config->weight_quant) << std::endl;
+      assert(false);
+      break;
+    }
+  }
+
+  _rms_att_weight = static_cast<float*>(check_tensor(
+    rms_att_weight, Quant::F32, {config->dim, 0, 0, 0}, __LINE__
+  ));
+  _rms_ffn_weight = static_cast<float*>(check_tensor(
+    rms_ffn_weight, Quant::F32, {config->dim, 0, 0, 0}, __LINE__
+  ));
+
+  bool need_block_scales = _config->weight_quant == Quant::F8E5M2;
+  int b0 = config->block_size[0];
+  int b1 = config->block_size[1];
+
+  if (config->n_routed_experts > 0 && layer_i >= config->first_k_dense_replace) {
+    _moegate = static_cast<float*>(check_tensor(
+      moegate, Quant::F32, {config->n_routed_experts, config->dim, 0, 0}, __LINE__
+    ));
+    if (moegate_bias != nullptr) {
+      _moegate_bias = static_cast<float*>(check_tensor(
+        moegate_bias, Quant::F32, {config->n_routed_experts, 0, 0, 0}, __LINE__
+      ));
+    }
+    _w1 = check_tensor(
+      w1, config->weight_quant, {config->n_routed_experts, config->moe_intermediate_size, config->dim, 0}, __LINE__
+    );
+    _w2 = check_tensor(
+      w2, config->weight_quant, {config->n_routed_experts, config->dim, config->moe_intermediate_size, 0}, __LINE__
+    );
+    _w3 = check_tensor(
+      w3, config->weight_quant, {config->n_routed_experts, config->moe_intermediate_size, config->dim, 0}, __LINE__
+    );
+    if (need_block_scales) {
+      _s1 = static_cast<float*>(check_tensor(
+        s1, Quant::F32,
+        {config->n_routed_experts, cdiv(config->moe_intermediate_size, b0), cdiv(config->dim, b1), 0},
+        __LINE__
+      ));
+      _s2 = static_cast<float*>(check_tensor(
+        s2, Quant::F32,
+        {config->n_routed_experts, cdiv(config->dim, b0), cdiv(config->moe_intermediate_size, b1), 0},
+        __LINE__
+      ));
+      _s3 = static_cast<float*>(check_tensor(
+        s3, Quant::F32,
+        {config->n_routed_experts, cdiv(config->moe_intermediate_size, b0), cdiv(config->dim, b1), 0},
+        __LINE__
+      ));
+    }
+    if (config->n_shared_experts > 0) {
+      _shared_w1 = check_tensor(
+        shared_w1, config->weight_quant, {config->n_shared_experts * config->moe_intermediate_size, config->dim, 0}, __LINE__
+      );
+      _shared_w2 = check_tensor(
+        shared_w2, config->weight_quant, {config->dim, config->n_shared_experts * config->moe_intermediate_size, 0}, __LINE__
+      );
+      _shared_w3 = check_tensor(
+        shared_w3, config->weight_quant, {config->n_shared_experts * config->moe_intermediate_size, config->dim, 0}, __LINE__
+      );
+      if (need_block_scales) {
+        _shared_s1 = static_cast<float*>(check_tensor(
+          shared_s1, Quant::F32,
+          {cdiv(config->n_shared_experts * config->moe_intermediate_size, b0), cdiv(config->dim, b1), 0},
+          __LINE__
+        ));
+        _shared_s2 = static_cast<float*>(check_tensor(
+          shared_s2, Quant::F32,
+          {cdiv(config->dim, b0), cdiv(config->n_shared_experts * config->moe_intermediate_size, b1), 0},
+          __LINE__
+        ));
+        _shared_s3 = static_cast<float*>(check_tensor(
+          shared_s3, Quant::F32,
+          {cdiv(config->n_shared_experts * config->moe_intermediate_size, b0), cdiv(config->dim, b1), 0},
+          __LINE__
+        ));
+      }
+    }
+  } else {
+    _w1 = check_tensor(
+      w1, config->weight_quant, {config->hidden_dim, config->dim, 0, 0}, __LINE__
+    );
+    _w2 = check_tensor(
+      w2, config->weight_quant, {config->dim, config->hidden_dim, 0, 0}, __LINE__
+    );
+    _w3 = check_tensor(
+      w3, config->weight_quant, {config->hidden_dim, config->dim, 0, 0}, __LINE__
+    );
+    if (need_block_scales) {
+      _s1 = static_cast<float*>(check_tensor(
+        s1, Quant::F32,
+        {cdiv(config->hidden_dim, b0), cdiv(config->dim, b1), 0, 0},
+        __LINE__
+      ));
+      _s2 = static_cast<float*>(check_tensor(
+        s2, Quant::F32,
+        {cdiv(config->dim, b0), cdiv(config->hidden_dim, b1), 0, 0},
+        __LINE__
+      ));
+      _s3 = static_cast<float*>(check_tensor(
+        s3, Quant::F32,
+        {cdiv(config->hidden_dim, b0), cdiv(config->dim, b1), 0, 0},
+        __LINE__
+      ));
+    }
+  }
+}
+
+Block::~Block() {}
+
+void Block::block(
+  InferenceState& s,
+  int pos,
+  int kv_sink,
+  int kv_pos,
+  int kv_len
+) const {
+  if (_device == Device::CPU) {
+    switch (_config->weight_quant) {
+      case Quant::F32:
+        _block_cpu<float>(s, pos, kv_sink, kv_pos, kv_len);
+        break;
+      case Quant::F16:
+#if defined(__AVX2__) && defined(__F16C__)
+        _block_cpu<f16_t>(s, pos, kv_sink, kv_pos, kv_len);
+#else
+        assert(false && "float16 not supported on this platform");
+#endif
+        break;
+      case Quant::F8E5M2:
+        _block_cpu<f8e5m2_t>(s, pos, kv_sink, kv_pos, kv_len);
+        break;
+      case Quant::Q2_K:
+        _block_cpu<block_q2_K>(s, pos, kv_sink, kv_pos, kv_len);
+        break;
+      default:
+        assert(false && "unsupported weight quantization for cpu");
+    }
+  }
+}
+
+
+
+BlockMHA::BlockMHA(
+  int layer_i,
+  const std::shared_ptr<Config> config,
+  const Tensor* rms_att_weight,
   const Tensor* rms_q_a_weight,
   const Tensor* rms_kv_a_weight,
   const Tensor* rms_ffn_weight,
@@ -255,6 +428,138 @@ Block::Block(
   const Tensor* sq_b,
   const Tensor* wkv_b,
   const Tensor* skv_b,
+  const Tensor* wo,
+  const Tensor* so,
+  const Tensor* w1,
+  const Tensor* s1,
+  const Tensor* w2,
+  const Tensor* s2,
+  const Tensor* w3,
+  const Tensor* s3,
+  const Tensor* shared_w1,
+  const Tensor* shared_s1,
+  const Tensor* shared_w2,
+  const Tensor* shared_s2,
+  const Tensor* shared_w3,
+  const Tensor* shared_s3,
+  const Tensor* moegate,
+  const Tensor* moegate_bias
+) : Block(layer_i, config, rms_att_weight, rms_ffn_weight, w1, s1, w2, s2, w3, s3, shared_w1, shared_s1, shared_w2, shared_s2, shared_w3, shared_s3, moegate, moegate_bias) {
+
+  bool need_block_scales = _config->weight_quant == Quant::F8E5M2;
+  int b0 = config->block_size[0];
+  int b1 = config->block_size[1];
+
+  if (config->q_lora_rank > 0) {
+    _rms_q_a_weight = static_cast<float*>(check_tensor(
+      rms_q_a_weight, Quant::F32, {config->q_lora_rank, 0, 0, 0}, __LINE__
+    ));
+    _wq_a = check_tensor(
+      wq_a, config->weight_quant, {config->q_lora_rank, config->dim, 0, 0}, __LINE__
+    );
+    _wq_b = check_tensor(
+      wq_b, config->weight_quant, {config->n_heads * config->head_dim, config->q_lora_rank, 0, 0}, __LINE__
+    );
+    if (need_block_scales) {
+      _sq_a = static_cast<float*>(check_tensor(
+        sq_a, Quant::F32,
+        {cdiv(config->q_lora_rank, b0), cdiv(config->dim, b1), 0, 0},
+        __LINE__
+      ));
+      _sq_b = static_cast<float*>(check_tensor(
+        sq_b, Quant::F32,
+        {cdiv(config->n_heads * config->head_dim, b0), cdiv(config->q_lora_rank, b1), 0, 0},
+        __LINE__
+      ));
+    }
+  } else {
+    _wq = check_tensor(
+      wq, config->weight_quant, {config->n_heads * config->head_dim, config->dim, 0, 0}, __LINE__
+    );
+    if (need_block_scales) {
+      _sq = static_cast<float*>(check_tensor(
+        sq, Quant::F32,
+        {cdiv(config->n_heads * config->head_dim, b0), cdiv(config->dim, b1), 0, 0},
+        __LINE__
+      ));
+    }
+  }
+
+  _rms_kv_a_weight = static_cast<float*>(check_tensor(
+    rms_kv_a_weight, Quant::F32, {config->kv_lora_rank, 0, 0, 0}, __LINE__ // Assuming kv_lora_rank is correct size here for MHA norm too
+  ));
+  _wkv_a = check_tensor(
+    wkv_a, config->weight_quant, {config->kv_lora_rank + config->qk_rope_head_dim, config->dim, 0, 0}, __LINE__
+  );
+  _wkv_b = check_tensor(
+    wkv_b, config->weight_quant, {config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim), config->kv_lora_rank, 0, 0}, __LINE__
+  );
+  _wo = check_tensor(
+    wo, config->weight_quant, {config->dim, config->n_heads * config->v_head_dim, 0, 0}, __LINE__
+  );
+
+  if (need_block_scales) {
+    _skv_a = static_cast<float*>(check_tensor(
+      skv_a, Quant::F32,
+      {cdiv(config->kv_lora_rank + config->qk_rope_head_dim, b0), cdiv(config->dim, b1), 0, 0},
+      __LINE__
+    ));
+    _skv_b = static_cast<float*>(check_tensor(
+      skv_b, Quant::F32,
+      {cdiv(config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim), b0), cdiv(config->kv_lora_rank, b1), 0, 0},
+      __LINE__
+    ));
+    _so = static_cast<float*>(check_tensor(
+      so, Quant::F32,
+      {cdiv(config->dim, b0), cdiv(config->n_heads * config->v_head_dim, b1), 0, 0},
+      __LINE__
+    ));
+  }
+
+  _key_cache = new f16_t[config->max_seq_len * config->n_kv_heads * config->head_dim]();
+  _value_cache = new f16_t[config->max_seq_len * config->n_kv_heads * config->v_head_dim]();
+}
+
+BlockMHA::~BlockMHA() {
+  if (_device == Device::CPU) {
+    delete[] _key_cache;
+    delete[] _value_cache;
+  }
+}
+
+void BlockMHA::attention_impl(
+  InferenceState& s, int pos, int kv_sink, int kv_pos, int kv_len
+) const {
+  switch (_config->weight_quant) {
+    case Quant::F32:
+      _attention_impl<float>(s, pos, kv_sink, kv_pos, kv_len);
+      break;
+    case Quant::F16:
+      _attention_impl<f16_t>(s, pos, kv_sink, kv_pos, kv_len);
+      break;
+    case Quant::F8E5M2:
+      _attention_impl<f8e5m2_t>(s, pos, kv_sink, kv_pos, kv_len);
+      break;
+    case Quant::Q2_K:
+      _attention_impl<block_q2_K>(s, pos, kv_sink, kv_pos, kv_len);
+      break;
+    default:
+      assert(false && "unsupported weight quantization for mha");
+  }
+}
+
+
+BlockMLA::BlockMLA(
+  int layer_i,
+  const std::shared_ptr<Config> config,
+  const Tensor* rms_att_weight,
+  const Tensor* rms_q_a_weight,
+  const Tensor* rms_kv_a_weight,
+  const Tensor* rms_ffn_weight,
+  const Tensor* wq_a,
+  const Tensor* sq_a,
+  const Tensor* wkv_a,
+  const Tensor* skv_a,
   const Tensor* wo,
   const Tensor* so,
   const Tensor* wc,
@@ -277,275 +582,100 @@ Block::Block(
   const Tensor* shared_s3,
   const Tensor* moegate,
   const Tensor* moegate_bias
-) {
-  _layer_i = layer_i;
-  _config = config;
-  switch (config->weight_quant) {
-    case Quant::F32:
-    case Quant::F16:
-    case Quant::F8E5M2:
-    case Quant::Q2_K: {
-      break;
-    }
-    default: {
-      std::cerr << "FATAL: unsupported weight quantization: " << quant_to_string(config->weight_quant) << std::endl;
-      assert(false);
-      break;
-    }
-  }
+) : Block(layer_i, config, rms_att_weight, rms_ffn_weight, w1, s1, w2, s2, w3, s3, shared_w1, shared_s1, shared_w2, shared_s2, shared_w3, shared_s3, moegate, moegate_bias) {
 
-  _rms_att_weight = static_cast<float*>(check_tensor(
-    rms_att_weight, Quant::F32, {config->dim, 0, 0, 0}, __LINE__
+  bool need_block_scales = _config->weight_quant == Quant::F8E5M2;
+  int b0 = config->block_size[0];
+  int b1 = config->block_size[1];
+
+  _rms_q_a_weight = static_cast<float*>(check_tensor(
+    rms_q_a_weight, Quant::F32, {config->q_lora_rank, 0, 0, 0}, __LINE__
   ));
-  if (config->q_lora_rank > 0) {
-    _rms_q_a_weight = static_cast<float*>(check_tensor(
-      rms_q_a_weight, Quant::F32, {config->q_lora_rank, 0, 0, 0}, __LINE__
-    ));
-  }
   _rms_kv_a_weight = static_cast<float*>(check_tensor(
-    rms_kv_a_weight, Quant::F32, {config->kv_lora_rank, 0, 0, 0}, __LINE__
-  ));
-  _rms_ffn_weight = static_cast<float*>(check_tensor(
-    rms_ffn_weight, Quant::F32, {config->dim, 0, 0, 0}, __LINE__
+    rms_kv_a_weight, Quant::F32, {config->kv_lora_rank, 0, 0, 0}, __LINE__ // Only norm latent part
   ));
 
-  if (config->q_lora_rank > 0) {
-    _wq_a = check_tensor(
-      wq_a, config->weight_quant, {config->q_lora_rank, config->dim, 0, 0}, __LINE__
-    );
-    if (config->use_mla) {
-      _wc = check_tensor(
-        wc, config->weight_quant, {config->n_heads * config->kv_lora_rank, config->q_lora_rank, 0, 0}, __LINE__
-      );
-      _wq_rope_b = check_tensor(
-        wq_rope_b, config->weight_quant, {config->n_heads * config->qk_rope_head_dim, config->q_lora_rank, 0, 0}, __LINE__
-      );
-    } else {
-      _wq_b = check_tensor(
-        wq_b, config->weight_quant, {config->n_heads * config->head_dim, config->q_lora_rank, 0, 0}, __LINE__
-      );
-    }
-  } else {
-    _wq = check_tensor(
-      wq, config->weight_quant, {config->n_heads * config->head_dim, config->dim, 0, 0}, __LINE__
-    );
-  }
+  _wq_a = check_tensor(
+    wq_a, config->weight_quant, {config->q_lora_rank, config->dim, 0, 0}, __LINE__
+  );
   _wkv_a = check_tensor(
     wkv_a, config->weight_quant, {config->kv_lora_rank + config->qk_rope_head_dim, config->dim, 0, 0}, __LINE__
   );
-  if (config->use_mla) {
-    _wv_b = check_tensor(
+  _wc = check_tensor(
+    wc, config->weight_quant, {config->n_heads * config->kv_lora_rank, config->q_lora_rank, 0, 0}, __LINE__
+  );
+  _wq_rope_b = check_tensor(
+    wq_rope_b, config->weight_quant, {config->n_heads * config->qk_rope_head_dim, config->q_lora_rank, 0, 0}, __LINE__
+  );
+  _wv_b = check_tensor(
       wv_b, config->weight_quant, {config->n_heads * config->v_head_dim, config->kv_lora_rank, 0, 0}, __LINE__
-    );
-  } else {
-    _wkv_b = check_tensor(
-      wkv_b, config->weight_quant, {config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim), config->kv_lora_rank, 0, 0}, __LINE__
-    );
-  }
+  );
   _wo = check_tensor(
     wo, config->weight_quant, {config->dim, config->n_heads * config->v_head_dim, 0, 0}, __LINE__
   );
 
-  if (config->n_routed_experts > 0 && layer_i >= config->first_k_dense_replace) {
-    _moegate = static_cast<float*>(check_tensor(
-      moegate, Quant::F32, {config->n_routed_experts, config->dim, 0, 0}, __LINE__
-    ));
-    if (moegate_bias != nullptr) {
-      _moegate_bias = static_cast<float*>(check_tensor(
-        moegate_bias, Quant::F32, {config->n_routed_experts, 0, 0, 0}, __LINE__
-      ));
-    }
-    _w1 = check_tensor(
-      w1, config->weight_quant, {config->n_routed_experts, config->moe_intermediate_size, config->dim, 0}, __LINE__
-    );
-    _w2 = check_tensor(
-      w2, config->weight_quant, {config->n_routed_experts, config->dim, config->moe_intermediate_size, 0}, __LINE__
-    );
-    _w3 = check_tensor(
-      w3, config->weight_quant, {config->n_routed_experts, config->moe_intermediate_size, config->dim, 0}, __LINE__
-    );
-    if (config->n_shared_experts > 0) {
-      _shared_w1 = check_tensor(
-        shared_w1, config->weight_quant, {config->n_shared_experts * config->moe_intermediate_size, config->dim, 0}, __LINE__
-      );
-      _shared_w2 = check_tensor(
-        shared_w2, config->weight_quant, {config->dim, config->n_shared_experts * config->moe_intermediate_size, 0}, __LINE__
-      );
-      _shared_w3 = check_tensor(
-        shared_w3, config->weight_quant, {config->n_shared_experts * config->moe_intermediate_size, config->dim, 0}, __LINE__
-      );
-    }
-  } else {
-    _w1 = check_tensor(
-      w1, config->weight_quant, {config->hidden_dim, config->dim, 0, 0}, __LINE__
-    );
-    _w2 = check_tensor(
-      w2, config->weight_quant, {config->dim, config->hidden_dim, 0, 0}, __LINE__
-    );
-    _w3 = check_tensor(
-      w3, config->weight_quant, {config->hidden_dim, config->dim, 0, 0}, __LINE__
-    );
-  }
-
-  bool need_block_scales = _config->weight_quant == Quant::F8E5M2;
   if (need_block_scales) {
-    int b0 = config->block_size[0];
-    int b1 = config->block_size[1];
-    if (config->q_lora_rank > 0) {
-      _sq_a = static_cast<float*>(check_tensor(
-        sq_a, Quant::F32, 
-        {cdiv(config->q_lora_rank, b0), cdiv(config->dim, b1), 0, 0}, 
-        __LINE__
-      ));
-      if (config->use_mla) {
-        _sc = static_cast<float*>(check_tensor(
-          sc, Quant::F32, 
-          {cdiv(config->n_heads * config->kv_lora_rank, b0), cdiv(config->q_lora_rank, b1), 0, 0}, 
-          __LINE__
-        ));
-        _sq_rope_b = static_cast<float*>(check_tensor(
-          sq_rope_b, Quant::F32, 
-          {cdiv(config->n_heads * config->qk_rope_head_dim, b0), cdiv(config->q_lora_rank, b1), 0, 0}, 
-          __LINE__
-        ));
-      } else {
-        _sq_b = static_cast<float*>(check_tensor(
-          sq_b, Quant::F32, 
-          {cdiv(config->n_heads * config->head_dim, b0), cdiv(config->q_lora_rank, b1), 0, 0}, 
-          __LINE__
-        ));
-      }
-    } else {
-      _sq = static_cast<float*>(check_tensor(
-        sq, Quant::F32, 
-        {cdiv(config->n_heads * config->head_dim, b0), cdiv(config->dim, b1), 0, 0}, 
-        __LINE__
-      ));
-    }
+    _sq_a = static_cast<float*>(check_tensor(
+      sq_a, Quant::F32,
+      {cdiv(config->q_lora_rank, b0), cdiv(config->dim, b1), 0, 0},
+      __LINE__
+    ));
     _skv_a = static_cast<float*>(check_tensor(
-      skv_a, Quant::F32, 
-      {cdiv(config->kv_lora_rank + config->qk_rope_head_dim, b0), cdiv(config->dim, b1), 0, 0}, 
+      skv_a, Quant::F32,
+      {cdiv(config->kv_lora_rank + config->qk_rope_head_dim, b0), cdiv(config->dim, b1), 0, 0},
       __LINE__
     ));
-    if (config->use_mla) {
-      _sv_b = static_cast<float*>(check_tensor(
-        sv_b, Quant::F32, 
-        {cdiv(config->n_heads * config->v_head_dim, b0), cdiv(config->kv_lora_rank, b1), 0, 0}, 
-        __LINE__
-      ));
-    } else {
-      _skv_b = static_cast<float*>(check_tensor(
-        skv_b, Quant::F32, 
-        {cdiv(config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim), b0), cdiv(config->kv_lora_rank, b1), 0, 0}, 
-        __LINE__
-      ));
-    }
+    _sc = static_cast<float*>(check_tensor(
+      sc, Quant::F32,
+      {cdiv(config->n_heads * config->kv_lora_rank, b0), cdiv(config->q_lora_rank, b1), 0, 0},
+      __LINE__
+    ));
+    _sq_rope_b = static_cast<float*>(check_tensor(
+      sq_rope_b, Quant::F32,
+      {cdiv(config->n_heads * config->qk_rope_head_dim, b0), cdiv(config->q_lora_rank, b1), 0, 0},
+      __LINE__
+    ));
+    _sv_b = static_cast<float*>(check_tensor(
+      sv_b, Quant::F32,
+      {cdiv(config->n_heads * config->v_head_dim, b0), cdiv(config->kv_lora_rank, b1), 0, 0},
+      __LINE__
+    ));
     _so = static_cast<float*>(check_tensor(
-      so, Quant::F32, 
-      {cdiv(config->dim, b0), cdiv(config->n_heads * config->v_head_dim, b1), 0, 0}, 
+      so, Quant::F32,
+      {cdiv(config->dim, b0), cdiv(config->n_heads * config->v_head_dim, b1), 0, 0},
       __LINE__
     ));
-    if (config->n_routed_experts > 0 && layer_i >= config->first_k_dense_replace) {
-      _s1 = static_cast<float*>(check_tensor(
-        s1, Quant::F32, 
-        {config->n_routed_experts, cdiv(config->moe_intermediate_size, b0), cdiv(config->dim, b1), 0}, 
-        __LINE__
-      ));
-      _s2 = static_cast<float*>(check_tensor(
-        s2, Quant::F32, 
-        {config->n_routed_experts, cdiv(config->dim, b0), cdiv(config->moe_intermediate_size, b1), 0}, 
-        __LINE__
-      ));
-      _s3 = static_cast<float*>(check_tensor(
-        s3, Quant::F32, 
-        {config->n_routed_experts, cdiv(config->moe_intermediate_size, b0), cdiv(config->dim, b1), 0}, 
-        __LINE__
-      ));
-      if (config->n_shared_experts > 0) {
-        _shared_s1 = static_cast<float*>(check_tensor(
-          shared_s1, Quant::F32, 
-          {cdiv(config->n_shared_experts * config->moe_intermediate_size, b0), cdiv(config->dim, b1), 0}, 
-          __LINE__
-        ));
-        _shared_s2 = static_cast<float*>(check_tensor(
-          shared_s2, Quant::F32, 
-          {cdiv(config->dim, b0), cdiv(config->n_shared_experts * config->moe_intermediate_size, b1), 0}, 
-          __LINE__
-        ));
-        _shared_s3 = static_cast<float*>(check_tensor(
-          shared_s3, Quant::F32, 
-          {cdiv(config->n_shared_experts * config->moe_intermediate_size, b0), cdiv(config->dim, b1), 0}, 
-          __LINE__
-        ));
-      }
-    } else {
-      _s1 = static_cast<float*>(check_tensor(
-        s1, Quant::F32, 
-        {cdiv(config->hidden_dim, b0), cdiv(config->dim, b1), 0, 0}, 
-        __LINE__
-      ));
-      _s2 = static_cast<float*>(check_tensor(
-        s2, Quant::F32, 
-        {cdiv(config->dim, b0), cdiv(config->hidden_dim, b1), 0, 0}, 
-        __LINE__
-      ));
-      _s3 = static_cast<float*>(check_tensor(
-        s3, Quant::F32, 
-        {cdiv(config->hidden_dim, b0), cdiv(config->dim, b1), 0, 0}, 
-        __LINE__
-      ));
-    }
   }
 
-  if (config->use_mla) {
-    _kv_nope_cache = new f16_t[config->max_seq_len * config->kv_lora_rank]();
-    _kv_rope_cache = new f16_t[config->max_seq_len * config->qk_rope_head_dim]();
-  } else {
-    _key_cache = new f16_t[config->max_seq_len * config->n_kv_heads * config->head_dim]();
-    _value_cache = new f16_t[config->max_seq_len * config->n_kv_heads * config->v_head_dim]();
-  }
+  _kv_nope_cache = new f16_t[config->max_seq_len * config->kv_lora_rank]();
+  _kv_rope_cache = new f16_t[config->max_seq_len * config->qk_rope_head_dim]();
 }
 
-Block::~Block() {
+BlockMLA::~BlockMLA() {
   if (_device == Device::CPU) {
-    delete[] _key_cache;
-    delete[] _value_cache;
+    delete[] _kv_nope_cache;
+    delete[] _kv_rope_cache;
   }
 }
 
-void Block::block(
-  InferenceState& s,  // inference state
-  int pos,            // index of the current token in the sequence
-  int kv_sink,        // number of sink tokens currently in the KV cache
-  int kv_pos,         // index of the current token in the kv cache, must be in [0..kv_len) since kv cache is a ring buffer
-  int kv_len          // number of tokens in the kv cache that we will attend over
+void BlockMLA::attention_impl(
+  InferenceState& s, int pos, int kv_sink, int kv_pos, int kv_len
 ) const {
-  if (_device == Device::CPU) {
-    switch (_config->weight_quant) {
-      case Quant::F32: {
-        _block_cpu<float>(s, pos, kv_sink, kv_pos, kv_len);
-        break;
-      }
-      case Quant::F16: {
-#if defined(__AVX2__) && defined(__F16C__)
-        _block_cpu<f16_t>(s, pos, kv_sink, kv_pos, kv_len);
-#else
-        assert(false && "float16 not supported on this platform");
-#endif
-        break;
-      }
-      case Quant::F8E5M2: {
-        _block_cpu<f8e5m2_t>(s, pos, kv_sink, kv_pos, kv_len);
-        break;
-      }
-      case Quant::Q2_K: {
-        _block_cpu<block_q2_K>(s, pos, kv_sink, kv_pos, kv_len);
-        break;
-      }
-      default: {
-        assert(false && "unsupported weight quantization for cpu");
-      }
-    }
+  switch (_config->weight_quant) {
+    case Quant::F32:
+      _attention_impl<float>(s, pos, kv_sink, kv_pos, kv_len);
+      break;
+    case Quant::F16:
+      _attention_impl<f16_t>(s, pos, kv_sink, kv_pos, kv_len);
+      break;
+    case Quant::F8E5M2:
+      _attention_impl<f8e5m2_t>(s, pos, kv_sink, kv_pos, kv_len);
+      break;
+    case Quant::Q2_K:
+      _attention_impl<block_q2_K>(s, pos, kv_sink, kv_pos, kv_len);
+      break;
+    default:
+      assert(false && "unsupported weight quantization for mla");
   }
 }
 
@@ -634,14 +764,14 @@ Model::Model(YALMData& yalm, int context) {
   int b1 = config->block_size[1];
 
   token_embedding_table = check_tensor(
-    get_tensor(yalm, "model.embed.weight"), 
+    get_tensor(yalm, "model.embed.weight"),
     config->weight_quant,
     {config->vocab_size, config->dim, 0, 0},
     __LINE__
   );
   if (need_weight_scales) {
     token_embedding_scale = static_cast<float*>(check_tensor(
-      get_tensor(yalm, "model.embed.scale"), 
+      get_tensor(yalm, "model.embed.scale"),
       Quant::F32,
       {cdiv(config->vocab_size, b0), cdiv(config->dim, b1), 0, 0},
       __LINE__
@@ -649,51 +779,73 @@ Model::Model(YALMData& yalm, int context) {
   }
 
   for (int i = 0; i < config->n_layers; ++i) {
-    blocks.emplace_back(std::make_shared<Block>(
-      i,
-      config,
-      get_tensor(yalm, fmt::format("model.layers.{}.attn.norm.weight", i)),
-      config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.q_a_norm.weight", i)) : nullptr,
-      get_tensor(yalm, fmt::format("model.layers.{}.attn.kv_a_norm.weight", i)),
-      get_tensor(yalm, fmt::format("model.layers.{}.mlp.norm.weight", i)),
-      config->q_lora_rank == 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq.weight", i)) : nullptr,
-      need_weight_scales && config->q_lora_rank == 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq.scale", i)) : nullptr,
-      config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_a.weight", i)) : nullptr,
-      need_weight_scales && config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_a.scale", i)) : nullptr,
-      get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_a.weight", i)),
-      need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_a.scale", i)) : nullptr,
-      !use_mla && config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_b.weight", i)) : nullptr,
-      !use_mla && need_weight_scales && config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_b.scale", i)) : nullptr,
-      !use_mla ?get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_b.weight", i)) : nullptr,
-      !use_mla && need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_b.scale", i)) : nullptr,
-      get_tensor(yalm, fmt::format("model.layers.{}.attn.wo.weight", i)),
-      need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wo.scale", i)) : nullptr,
-      use_mla ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wc.weight", i)) : nullptr,
-      use_mla && need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wc.scale", i)) : nullptr,
-      use_mla ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_rope_b.weight", i)) : nullptr,
-      use_mla && need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_rope_b.scale", i)) : nullptr,
-      use_mla ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wv_b.weight", i)) : nullptr,
-      use_mla && need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wv_b.scale", i)) : nullptr,
-      get_tensor(yalm, fmt::format("model.layers.{}.mlp.w1.weight", i)),
-      need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.mlp.w1.scale", i)) : nullptr,
-      get_tensor(yalm, fmt::format("model.layers.{}.mlp.w2.weight", i)),
-      need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.mlp.w2.scale", i)) : nullptr,
-      get_tensor(yalm, fmt::format("model.layers.{}.mlp.w3.weight", i)),
-      need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.mlp.w3.scale", i)) : nullptr,
-      i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w1.weight", i)) : nullptr,
-      need_weight_scales && i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w1.scale", i)) : nullptr,
-      i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w2.weight", i)) : nullptr,
-      need_weight_scales && i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w2.scale", i)) : nullptr,
-      i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w3.weight", i)) : nullptr,
-      need_weight_scales && i >= config->first_k_dense_replace && config->n_shared_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w3.scale", i)) : nullptr,
-      i >= config->first_k_dense_replace && config->n_routed_experts > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.weight", i)) : nullptr,
-      i >= config->first_k_dense_replace && config->n_routed_experts > 0 && config->has_moegate_bias ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.bias", i)) : nullptr
-    ));
+    const Tensor* p_rms_att_weight = get_tensor(yalm, fmt::format("model.layers.{}.attn.norm.weight", i));
+    const Tensor* p_rms_ffn_weight = get_tensor(yalm, fmt::format("model.layers.{}.mlp.norm.weight", i));
+    const Tensor* p_w1 = get_tensor(yalm, fmt::format("model.layers.{}.mlp.w1.weight", i));
+    const Tensor* p_s1 = need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.mlp.w1.scale", i)) : nullptr;
+    const Tensor* p_w2 = get_tensor(yalm, fmt::format("model.layers.{}.mlp.w2.weight", i));
+    const Tensor* p_s2 = need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.mlp.w2.scale", i)) : nullptr;
+    const Tensor* p_w3 = get_tensor(yalm, fmt::format("model.layers.{}.mlp.w3.weight", i));
+    const Tensor* p_s3 = need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.mlp.w3.scale", i)) : nullptr;
+    const Tensor* p_shared_w1 = (i >= config->first_k_dense_replace && config->n_shared_experts > 0) ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w1.weight", i)) : nullptr;
+    const Tensor* p_shared_s1 = (need_weight_scales && i >= config->first_k_dense_replace && config->n_shared_experts > 0) ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w1.scale", i)) : nullptr;
+    const Tensor* p_shared_w2 = (i >= config->first_k_dense_replace && config->n_shared_experts > 0) ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w2.weight", i)) : nullptr;
+    const Tensor* p_shared_s2 = (need_weight_scales && i >= config->first_k_dense_replace && config->n_shared_experts > 0) ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w2.scale", i)) : nullptr;
+    const Tensor* p_shared_w3 = (i >= config->first_k_dense_replace && config->n_shared_experts > 0) ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w3.weight", i)) : nullptr;
+    const Tensor* p_shared_s3 = (need_weight_scales && i >= config->first_k_dense_replace && config->n_shared_experts > 0) ? get_tensor(yalm, fmt::format("model.layers.{}.shared_mlp.w3.scale", i)) : nullptr;
+    const Tensor* p_moegate = (i >= config->first_k_dense_replace && config->n_routed_experts > 0) ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.weight", i)) : nullptr;
+    const Tensor* p_moegate_bias = (i >= config->first_k_dense_replace && config->n_routed_experts > 0 && config->has_moegate_bias) ? get_tensor(yalm, fmt::format("model.layers.{}.moegate.bias", i)) : nullptr;
+
+    const Tensor* p_rms_q_a_weight = config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.q_a_norm.weight", i)) : nullptr;
+    const Tensor* p_rms_kv_a_weight = get_tensor(yalm, fmt::format("model.layers.{}.attn.kv_a_norm.weight", i));
+    const Tensor* p_wq_a = config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_a.weight", i)) : nullptr;
+    const Tensor* p_sq_a = (need_weight_scales && config->q_lora_rank > 0) ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_a.scale", i)) : nullptr;
+    const Tensor* p_wkv_a = get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_a.weight", i));
+    const Tensor* p_skv_a = need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_a.scale", i)) : nullptr;
+    const Tensor* p_wo = get_tensor(yalm, fmt::format("model.layers.{}.attn.wo.weight", i));
+    const Tensor* p_so = need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wo.scale", i)) : nullptr;
+
+
+    if (use_mla) {
+      const Tensor* p_wc = get_tensor(yalm, fmt::format("model.layers.{}.attn.wc.weight", i));
+      const Tensor* p_sc = need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wc.scale", i)) : nullptr;
+      const Tensor* p_wq_rope_b = get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_rope_b.weight", i));
+      const Tensor* p_sq_rope_b = need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_rope_b.scale", i)) : nullptr;
+      const Tensor* p_wv_b = get_tensor(yalm, fmt::format("model.layers.{}.attn.wv_b.weight", i));
+      const Tensor* p_sv_b = need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wv_b.scale", i)) : nullptr;
+
+      blocks.emplace_back(std::make_shared<BlockMLA>(
+        i, config,
+        p_rms_att_weight, p_rms_q_a_weight, p_rms_kv_a_weight, p_rms_ffn_weight,
+        p_wq_a, p_sq_a, p_wkv_a, p_skv_a, p_wo, p_so,
+        p_wc, p_sc, p_wq_rope_b, p_sq_rope_b, p_wv_b, p_sv_b,
+        p_w1, p_s1, p_w2, p_s2, p_w3, p_s3,
+        p_shared_w1, p_shared_s1, p_shared_w2, p_shared_s2, p_shared_w3, p_shared_s3,
+        p_moegate, p_moegate_bias
+      ));
+    } else {
+      const Tensor* p_wq = config->q_lora_rank == 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq.weight", i)) : nullptr;
+      const Tensor* p_sq = (need_weight_scales && config->q_lora_rank == 0) ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq.scale", i)) : nullptr;
+      const Tensor* p_wq_b = config->q_lora_rank > 0 ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_b.weight", i)) : nullptr;
+      const Tensor* p_sq_b = (need_weight_scales && config->q_lora_rank > 0) ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wq_b.scale", i)) : nullptr;
+      const Tensor* p_wkv_b = get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_b.weight", i));
+      const Tensor* p_skv_b = need_weight_scales ? get_tensor(yalm, fmt::format("model.layers.{}.attn.wkv_b.scale", i)) : nullptr;
+
+      blocks.emplace_back(std::make_shared<BlockMHA>(
+        i, config,
+        p_rms_att_weight, p_rms_q_a_weight, p_rms_kv_a_weight, p_rms_ffn_weight,
+        p_wq, p_sq, p_wq_a, p_sq_a, p_wkv_a, p_skv_a,
+        p_wq_b, p_sq_b, p_wkv_b, p_skv_b, p_wo, p_so,
+        p_w1, p_s1, p_w2, p_s2, p_w3, p_s3,
+        p_shared_w1, p_shared_s1, p_shared_w2, p_shared_s2, p_shared_w3, p_shared_s3,
+        p_moegate, p_moegate_bias
+      ));
+    }
   }
 
   rms_final_weight = static_cast<float*>(check_tensor(
-    get_tensor(yalm, "model.norm.weight"), 
-    Quant::F32, 
+    get_tensor(yalm, "model.norm.weight"),
+    Quant::F32,
     {config->dim, 0, 0, 0},
     __LINE__
   ));
@@ -703,15 +855,15 @@ Model::Model(YALMData& yalm, int context) {
     scls = token_embedding_scale;
   } else {
     wcls = check_tensor(
-      get_tensor(yalm, "model.output.weight"), 
-      config->weight_quant, 
+      get_tensor(yalm, "model.output.weight"),
+      config->weight_quant,
       {config->vocab_size, config->dim, 0, 0},
       __LINE__
     );
     if (need_weight_scales) {
       scls = static_cast<float*>(check_tensor(
-        get_tensor(yalm, "model.output.scale"), 
-        Quant::F32, 
+        get_tensor(yalm, "model.output.scale"),
+        Quant::F32,
         {cdiv(config->vocab_size, b0), cdiv(config->dim, b1), 0, 0},
         __LINE__
       ));
