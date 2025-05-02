@@ -5,6 +5,7 @@ env/
 build/
 __pycache__/
 *.egg-info/
+*.cpython-312-x86_64-linux-gnu.so
 
 # profiling tools
 *.sqlite
