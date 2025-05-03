@@ -556,17 +556,17 @@ static void rope_v3(f16_t* vec, int d, int head_dim, int pos, float theta) {
 
 // Compute next value in a sequence for a single causal self-attention head.
 void attn(
-  float* xout,    // (n_kv_heads * v_head_dim,) - output vector
+  float* xout,    // (n_heads * v_head_dim,) - output vector
   float* atth,    // (kv_len,) - scratch space to hold attention scores of the sequence
   const float* qh,      // (head_dim,) - query vector for this head
-  const f16_t* kh,      // (kv_len, n_kv_heads, head_dim) - buffer containing key vectors of the sequence for all KV heads
-  const f16_t* vh,      // (kv_len, n_kv_heads, v_head_dim) - buffer containing value vectors of the sequence for all KV heads
+  const f16_t* kh,      // (kv_len, n_heads, head_dim) - buffer containing key vectors of the sequence for all KV heads
+  const f16_t* vh,      // (kv_len, n_heads, v_head_dim) - buffer containing value vectors of the sequence for all KV heads
   int head_dim,   // size of the "key-space"
   int v_head_dim, // size of the "value-space"
-  int n_kv_heads, // number of kv heads, can be < n_heads (1 is MultiQueryAttention, >1 is GroupedQueryAttention)
+  int n_heads, // number of attention heads
   int kv_len      // number of tokens of the sequence we will attend over
 ) {
-  int k_stride = n_kv_heads * head_dim; // stride per token in this k head
+  int k_stride = n_heads * head_dim; // stride per token in this k head
   // calculate attention scores as dot products of q and k
   for (int t = 0; t < kv_len; ++t) {
     float score = 0.0f;
@@ -580,7 +580,7 @@ void attn(
   // softmax the scores to get attention weights over [0..kv_len)
   softmax(atth, atth, kv_len);
 
-  int v_stride = n_kv_heads * v_head_dim; // stride per token in this v head
+  int v_stride = n_heads * v_head_dim; // stride per token in this v head
   // mix values with attention weights
   for (int i = 0; i < v_head_dim; ++i) {
     float vi = 0.0f;
@@ -815,7 +815,7 @@ void BlockMHA::_attention_impl(
   rmsnorm(s.kv_a(), s.kv_a(), this->rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
   // un-compress the latent kv via multiplication with wkv_b
   int qk_nope_head_dim = c.head_dim - c.qk_rope_head_dim;
-  int uncompressed_kv_dim = c.n_kv_heads * (qk_nope_head_dim + c.v_head_dim);
+  int uncompressed_kv_dim = c.n_heads * (qk_nope_head_dim + c.v_head_dim);
   PROFILE(matmul(s.kv_b(), s.kv_a(), this->wkv_b<T>(), c.kv_lora_rank, uncompressed_kv_dim, c.block_size.data(), _skv_b, s.aqb()));
   // concatenate kv_b and k_rope in each head to build key heads
   for (int h = 0; h < c.n_heads; h++) {
@@ -834,11 +834,11 @@ void BlockMHA::_attention_impl(
   }
 
   // update kv cache
-  int key_dim = c.n_kv_heads * c.head_dim;
+  int key_dim = c.n_heads * c.head_dim;
   for (int i = 0; i < key_dim; ++i) {
     this->key_cache(kv_pos)[i] = float_to_half(s.k()[i]);
   }
-  int value_dim = c.n_kv_heads * c.v_head_dim;
+  int value_dim = c.n_heads * c.v_head_dim;
   for (int i = 0; i < value_dim; ++i) {
     this->value_cache(kv_pos)[i] = float_to_half(s.v()[i]);
   }
@@ -865,13 +865,11 @@ void BlockMHA::_attention_impl(
     PROFILE_BLOCK(self_attn_mha_inner);
     f16_t* kb = this->key_cache();
     f16_t* vb = this->value_cache();
-    int q_per_kv_head = c.n_heads / c.n_kv_heads;
     int h;
   #pragma omp parallel for private(h)
     for (h = 0; h < c.n_heads; h++) {
-      int kv_head_idx = h / q_per_kv_head;
-      int k_head_offset = kv_head_idx * c.head_dim;
-      int v_head_offset = kv_head_idx * c.v_head_dim;
+      int k_head_offset = h * c.head_dim;
+      int v_head_offset = h * c.v_head_dim;
       f16_t* kh = kb + k_head_offset; // Use pointer arithmetic for base address
       f16_t* vh = vb + v_head_offset; // Use pointer arithmetic for base address
       attn(
@@ -882,7 +880,7 @@ void BlockMHA::_attention_impl(
         vh,                    // Pointer to start of relevant V cache base
         c.head_dim,            // Dimension of K space
         c.v_head_dim,          // Dimension of V space
-        c.n_kv_heads,          // Total number of KV heads (passed to inner attn func for stride calculation)
+        c.n_heads,          // Total number of KV heads (passed to inner attn func for stride calculation)
         kv_len                 // Sequence length to attend over
       );
     }
@@ -994,23 +992,22 @@ void BlockMLA::_attention_impl(
 void mha_cpu(
   float* xout,  // (n_heads, head_dim)
   float* att,   // (n_heads, max_seq_len)
-  f16_t* kb,    // (max_seq_len, n_kv_heads, head_dim)
-  f16_t* vb,    // (max_seq_len, n_kv_heads, head_dim)
+  f16_t* kb,    // (max_seq_len, n_heads, head_dim)
+  f16_t* vb,    // (max_seq_len, n_heads, head_dim)
   float* q,     // (n_heads, head_dim)
-  int head_dim, int v_head_dim, int kv_len, int max_seq_len, int n_heads, int n_kv_heads
+  int head_dim, int v_head_dim, int kv_len, int max_seq_len, int n_heads, int n_heads
 ) {
   // Multihead attention. Iterate over all heads.
-  int q_per_kv_head = n_heads / n_kv_heads; // query heads per kv head (for MultiQueryAttention/GroupedQueryAttention)
   int h;
 #pragma omp parallel for private(h)
   for (h = 0; h < n_heads; h++) {
-    int k_head_offset = (h / q_per_kv_head) * head_dim;
-    int v_head_offset = (h / q_per_kv_head) * v_head_dim;
+    int k_head_offset = h * head_dim;
+    int v_head_offset = h * v_head_dim;
     f16_t* kh = kb + k_head_offset;
     f16_t* vh = vb + v_head_offset;
     attn(
       xout + head_dim * h, att + max_seq_len * h, q + head_dim * h, 
-      kh, vh, head_dim, v_head_dim, n_kv_heads, kv_len
+      kh, vh, head_dim, v_head_dim, n_heads, kv_len
     );
   }
 }

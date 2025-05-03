@@ -24,7 +24,6 @@ void Config::from_yalm(YALMData& yalm, int context) {
   hidden_dim = std::stoi(yalm.metadata.at("hidden_dim").get<std::string>());
   n_layers = std::stoi(yalm.metadata.at("n_layers").get<std::string>());
   n_heads = std::stoi(yalm.metadata.at("n_heads").get<std::string>());
-  n_kv_heads = std::stoi(yalm.metadata.at("n_kv_heads").get<std::string>());
   vocab_size = std::stoi(yalm.metadata.at("vocab_size").get<std::string>());
   // mixture of experts
   n_shared_experts = yalm.metadata.contains("n_shared_experts") ? std::stoi(yalm.metadata.at("n_shared_experts").get<std::string>()) : 0;
@@ -139,7 +138,7 @@ double Config::active_bytes(size_t pos) const {
   if (use_mla) {
     bytes_per_block += n_heads * v_head_dim * kv_lora_rank * bytes_per_weight; // wv_b
   } else {
-    bytes_per_block += n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim) * kv_lora_rank * bytes_per_weight; // wkv_b
+    bytes_per_block += n_heads * (head_dim-qk_rope_head_dim+v_head_dim) * kv_lora_rank * bytes_per_weight; // wkv_b
   }
   bytes_per_block += dim * n_heads * v_head_dim * bytes_per_weight; // wo
   if (n_routed_experts > 0) {
@@ -158,7 +157,7 @@ double Config::active_bytes(size_t pos) const {
     bytes_per_block += kv_len * kv_lora_rank * kv_entry_size; // kv_nope_cache
     bytes_per_block += kv_len * qk_rope_head_dim * kv_entry_size; // kv_rope_cache
   } else {
-    bytes_per_block += 2 * kv_len * n_kv_heads * head_dim * kv_entry_size; // key_cache, value_cache
+    bytes_per_block += 2 * kv_len * n_heads * head_dim * kv_entry_size; // key_cache, value_cache
   }
 
   double bytes = 0;
@@ -492,7 +491,7 @@ BlockMHA::BlockMHA(
     wkv_a, config->weight_quant, {config->kv_lora_rank + config->qk_rope_head_dim, config->dim, 0, 0}, __LINE__
   );
   _wkv_b = check_tensor(
-    wkv_b, config->weight_quant, {config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim), config->kv_lora_rank, 0, 0}, __LINE__
+    wkv_b, config->weight_quant, {config->n_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim), config->kv_lora_rank, 0, 0}, __LINE__
   );
   _wo = check_tensor(
     wo, config->weight_quant, {config->dim, config->n_heads * config->v_head_dim, 0, 0}, __LINE__
@@ -506,7 +505,7 @@ BlockMHA::BlockMHA(
     ));
     _skv_b = static_cast<float*>(check_tensor(
       skv_b, Quant::F32,
-      {cdiv(config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim), b0), cdiv(config->kv_lora_rank, b1), 0, 0},
+      {cdiv(config->n_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim), b0), cdiv(config->kv_lora_rank, b1), 0, 0},
       __LINE__
     ));
     _so = static_cast<float*>(check_tensor(
@@ -516,8 +515,8 @@ BlockMHA::BlockMHA(
     ));
   }
 
-  _key_cache = new f16_t[config->max_seq_len * config->n_kv_heads * config->head_dim]();
-  _value_cache = new f16_t[config->max_seq_len * config->n_kv_heads * config->v_head_dim]();
+  _key_cache = new f16_t[config->max_seq_len * config->n_heads * config->head_dim]();
+  _value_cache = new f16_t[config->max_seq_len * config->n_heads * config->v_head_dim]();
 }
 
 BlockMHA::~BlockMHA() {
@@ -686,7 +685,7 @@ InferenceState::InferenceState(const std::shared_ptr<Config> config):
   _xb = new float[config->dim]();
   _xb2 = new float[std::max({
     config->dim, 
-    config->n_kv_heads * config->v_head_dim, 
+    config->n_heads * config->v_head_dim, 
     config->n_heads * config->kv_lora_rank
   })]();
   _hb = new float[std::max({
@@ -699,10 +698,10 @@ InferenceState::InferenceState(const std::shared_ptr<Config> config):
   }
   _q = new float[config->n_heads * config->head_dim]();
   _kv_a = new float[config->kv_lora_rank + config->qk_rope_head_dim]();
-  _kv_b = new float[config->n_kv_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim)]();
-  _ropebuf = new float[config->n_kv_heads * config->qk_rope_head_dim]();
-  _k = new float[config->n_kv_heads * config->head_dim]();
-  _v = new float[config->n_kv_heads * config->v_head_dim]();
+  _kv_b = new float[config->n_heads * (config->head_dim-config->qk_rope_head_dim+config->v_head_dim)]();
+  _ropebuf = new float[config->n_heads * config->qk_rope_head_dim]();
+  _k = new float[config->n_heads * config->head_dim]();
+  _v = new float[config->n_heads * config->v_head_dim]();
   _att = new float[config->n_heads * config->max_seq_len]();
   _logits = new float[config->vocab_size]();
   if (config->use_mla) {
@@ -718,7 +717,7 @@ InferenceState::InferenceState(const std::shared_ptr<Config> config):
   size_t aqb_nitems = std::max({
     config->dim,
     config->moe_intermediate_size,
-    config->n_kv_heads * config->v_head_dim,
+    config->n_heads * config->v_head_dim,
     config->n_heads * config->kv_lora_rank,
     config->hidden_dim
   });

@@ -47,8 +47,7 @@ struct Config {
   int dim;                  // transformer input & output dimension
   int hidden_dim;           // dimension of hidden layer in feedforward network (dense blocks only)
   int n_layers;             // number of layers
-  int n_heads;              // number of attention query heads
-  int n_kv_heads;           // number of key and value heads; can be < n_heads (1 is MultiQueryAttention, >1 is GroupedQueryAttention)
+  int n_heads;              // number of attention heads
   int vocab_size;           // vocabulary size
   int max_seq_len;          // max sequence length
   float rope_theta;         // RoPE theta
@@ -144,16 +143,16 @@ private:
   // current activations
   float* _x = nullptr;         // (dim,) - latest activation
   float* _xb = nullptr;        // (dim,) - activation inside a residual branch
-  float* _xb2 = nullptr;       // (max{dim, n_kv_heads * v_head_dim, n_heads * kv_lora_rank},) - activation inside a residual branch (second slot)
+  float* _xb2 = nullptr;       // (max{dim, n_heads * v_head_dim, n_heads * kv_lora_rank},) - activation inside a residual branch (second slot)
   float* _hb = nullptr;        // (max{dim, hidden_dim},) - buffer for hidden dimension in feedforward network
   float* _hb2 = nullptr;       // (hidden_dim,) - buffer for hidden dimension in feedforward network (second slot)
   float* _q_a = nullptr;       // (q_lora_rank,) - compressed (latent) query vector for latest timestamp
   float* _q = nullptr;         // (n_heads * head_dim,) - query vectors for latest timestamp
   float* _kv_a = nullptr;      // (kv_lora_rank + qk_rope_head_dim,) - compressed (latent) key-value vector for latest timestamp
-  float* _kv_b = nullptr;      // (n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim),) - uncompressed key-value vector for latest timestamp
-  float* _ropebuf = nullptr;   // (n_kv_heads * qk_rope_head_dim,) - buffer for rope
-  float* _k = nullptr;         // (n_kv_heads * head_dim,) - key vectors for latest timestamp
-  float* _v = nullptr;         // (n_kv_heads * v_head_dim,) - value vectors for latest timestamp
+  float* _kv_b = nullptr;      // (n_heads * (head_dim-qk_rope_head_dim+v_head_dim),) - uncompressed key-value vector for latest timestamp
+  float* _ropebuf = nullptr;   // (n_heads * qk_rope_head_dim,) - buffer for rope
+  float* _k = nullptr;         // (n_heads * head_dim,) - key vectors for latest timestamp
+  float* _v = nullptr;         // (n_heads * v_head_dim,) - value vectors for latest timestamp
   float* _att = nullptr;       // (n_heads, seq_len) - buffer for attention scores
   // MLA only
   float* _q_c = nullptr;       // (n_heads * kv_lora_rank,) - transformed and compressed query vector for latest timestamp
@@ -320,9 +319,9 @@ struct BlockMHA : public Block {
   template <typename T>
   T* wo() const { return static_cast<T*>(_wo); }
   f16_t* key_cache() const { return _key_cache; }
-  f16_t* key_cache(int pos) const { return _key_cache + pos * _config->head_dim * _config->n_kv_heads; }
+  f16_t* key_cache(int pos) const { return _key_cache + pos * _config->head_dim * _config->n_heads; }
   f16_t* value_cache() const { return _value_cache; }
-  f16_t* value_cache(int pos) const { return _value_cache + pos * _config->v_head_dim * _config->n_kv_heads; }
+  f16_t* value_cache(int pos) const { return _value_cache + pos * _config->v_head_dim * _config->n_heads; }
 
 protected:
   void attention_impl(
@@ -353,12 +352,12 @@ private:
   float* _so = nullptr;
   void* _wq_b = nullptr; // (n_heads * head_dim, q_lora_rank)
   float* _sq_b = nullptr;
-  void* _wkv_b = nullptr; // (n_kv_heads * (head_dim-qk_rope_head_dim+v_head_dim), kv_lora_rank)
+  void* _wkv_b = nullptr; // (n_heads * (head_dim-qk_rope_head_dim+v_head_dim), kv_lora_rank)
   float* _skv_b = nullptr;
 
   // MHA kv cache
-  f16_t* _key_cache = nullptr;   // (seq_len, n_kv_heads * head_dim)
-  f16_t* _value_cache = nullptr; // (seq_len, n_kv_heads * v_head_dim)
+  f16_t* _key_cache = nullptr;   // (seq_len, n_heads * head_dim)
+  f16_t* _value_cache = nullptr; // (seq_len, n_heads * v_head_dim)
 };
 
 /* Transformer Block - Multi-Latent Attention */
@@ -507,21 +506,21 @@ void attn(
   float* xout,    // (dim,) - output vector
   float* atth,    // (kv_len,) - scratch space to hold attention scores of the sequence
   const float* qh,      // (head_dim,) - query vector for this head
-  const f16_t* kh,      // (kv_len, n_kv_heads, head_dim) - buffer containing key vectors of the sequence for all KV heads
-  const f16_t* vh,      // (kv_len, n_kv_heads, head_dim) - buffer containing value vectors of the sequence for all KV heads
+  const f16_t* kh,      // (kv_len, n_heads, head_dim) - buffer containing key vectors of the sequence for all KV heads
+  const f16_t* vh,      // (kv_len, n_heads, head_dim) - buffer containing value vectors of the sequence for all KV heads
   int head_dim,   // size of the "key-space"
   int v_head_dim, // size of the "value-space"
-  int n_kv_heads, // number of kv heads, can be < n_heads (1 is MultiQueryAttention, >1 is GroupedQueryAttention)
+  int n_heads, // number of attention heads
   int kv_len      // number of tokens of the sequence we will attend over
 );
 
 void mha_cpu(
   float* xout,  // (n_heads, head_dim)
   float* att,   // (n_heads, max_seq_len)
-  f16_t* kb,    // (max_seq_len, n_kv_heads, head_dim)
-  f16_t* vb,    // (max_seq_len, n_kv_heads, head_dim)
+  f16_t* kb,    // (max_seq_len, n_heads, head_dim)
+  f16_t* vb,    // (max_seq_len, n_heads, head_dim)
   float* q,     // (n_heads, head_dim)
-  int head_dim, int v_head_dim, int kv_len, int max_seq_len, int n_heads, int n_kv_heads
+  int head_dim, int v_head_dim, int kv_len, int max_seq_len, int n_heads, int n_heads
 );
 
 void matmul_unscaled(float* xout, float* x, float* w, int n, int d);

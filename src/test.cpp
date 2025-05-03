@@ -72,13 +72,11 @@ void test_attn() {
   constexpr int TEST_DIM = 6;
   constexpr int TEST_HEAD_DIM = 3;
   constexpr int TEST_N_HEADS = 2;
-  constexpr int TEST_N_KV_HEADS = 1;
   std::shared_ptr<Config> config = std::make_shared<Config>();
   config->dim = TEST_DIM;
   config->hidden_dim = TEST_DIM;
   config->head_dim = TEST_HEAD_DIM;
   config->n_heads = TEST_N_HEADS;
-  config->n_kv_heads = TEST_N_KV_HEADS;
   config->vocab_size = 1;
   config->max_seq_len = TEST_SEQ_LEN;
   InferenceState s(config);
@@ -95,20 +93,19 @@ void test_attn() {
     0., 1., 0., // t=1
     0., 0., 1., // t=2
     -1., 0., 0. // t=3
-  }); // (kv_len, n_kv_heads, head_dim) - buffer containing key vectors of the sequence for all KV heads
+  }); // (kv_len, n_heads, head_dim) - buffer containing key vectors of the sequence for all KV heads
   std::vector<f16_t> vb = float_array_to_half({
     1., 0., 0., // t=0
     0., 1., 0., // t=1
     0., 0., 1., // t=2
     -1., 0., 0. // t=3
-  }); // (kv_len, n_kv_heads, head_dim) - buffer containing value vectors of the sequence for all KV heads
+  }); // (kv_len, n_heads, head_dim) - buffer containing value vectors of the sequence for all KV heads
 
   // Multihead attention. Iterate over all heads.
-  int q_per_kv_head = TEST_N_HEADS / TEST_N_KV_HEADS; // query heads per kv head (for MultiQueryAttention/GroupedQueryAttention)
   int h;
 #pragma omp parallel for private(h)
   for (h = 0; h < TEST_N_HEADS; h++) {
-    int kv_head_offset = (h / q_per_kv_head) * TEST_HEAD_DIM;
+    int kv_head_offset = h * TEST_HEAD_DIM;
     f16_t* kh = kb.data() + kv_head_offset;
     f16_t* vh = vb.data() + kv_head_offset;
     attn(s.xb(h), s.att(h), s.q(h), kh, vh, TEST_HEAD_DIM, TEST_HEAD_DIM, TEST_N_KV_HEADS, TEST_SEQ_LEN);

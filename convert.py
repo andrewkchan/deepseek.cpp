@@ -59,7 +59,6 @@ class Metadata:
       if n_layers is not None and self.n_layers > n_layers:
         self.n_layers = n_layers
       self.n_heads = config["num_attention_heads"]
-      self.n_kv_heads = config.get("num_key_value_heads", config["num_attention_heads"])
       self.vocab_size = config["vocab_size"]
       self.max_seq_len = config["max_position_embeddings"]
       self.bos_token_id = config["bos_token_id"]
@@ -116,7 +115,6 @@ class Metadata:
       result["hidden_dim"] = str(self.hidden_dim)
       result["n_layers"] = str(self.n_layers)
       result["n_heads"] = str(self.n_heads)
-      result["n_kv_heads"] = str(self.n_kv_heads)
       result["vocab_size"] = str(self.vocab_size)
       result["max_seq_len"] = str(self.max_seq_len)
       result["bos_token_id"] = str(self.bos_token_id)
@@ -369,7 +367,6 @@ def load_weights(model_files: List[str], metadata: Metadata, tie_word_embeddings
 
     if metadata.use_mla:
       assert metadata.q_lora_rank > 0
-      assert metadata.n_heads == metadata.n_kv_heads
       head_dim = metadata.qk_nope_head_dim + metadata.qk_rope_head_dim
       save_weight_and_scale(
         f"model.layers.{l}.attn.wkv_a.weight", f"model.layers.{l}.attn.wkv_a.scale", 
@@ -384,7 +381,7 @@ def load_weights(model_files: List[str], metadata: Metadata, tie_word_embeddings
       kv_b_proj = load_and_dequantize(
         f"model.layers.{l}.self_attn.kv_b_proj.weight", f"model.layers.{l}.self_attn.kv_b_proj.weight_scale_inv"
       ).reshape(
-        metadata.n_kv_heads, -1, metadata.kv_lora_rank
+        metadata.n_heads, -1, metadata.kv_lora_rank
       )
       # (n_heads, head_dim, q_lora_rank)
       q_b_proj = load_and_dequantize(
