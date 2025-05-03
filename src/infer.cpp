@@ -603,7 +603,6 @@ void attn_mla(
   int head_dim, // used for softmax scale factor
   int kv_lora_rank, // size of the "latent-space"
   int qk_rope_head_dim, // size of the "PE-space"
-  int n_heads, // number of heads
   int kv_len   // number of tokens of the sequence we will attend over
 ) {
   int kv_stride = kv_lora_rank; // stride per token in the latent buffer
@@ -969,7 +968,6 @@ void BlockMLA::_attention_impl(
         c.head_dim,
         c.kv_lora_rank,
         c.qk_rope_head_dim,
-        c.n_heads, // n_heads is needed? attn_mla doesn't use it currently. Check attn_mla.
         kv_len
       );
     }
