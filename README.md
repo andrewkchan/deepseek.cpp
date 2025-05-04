@@ -18,6 +18,12 @@ Since this program only supports DeepSeek, it's tiny compared to other inference
 | DeepSeek-V3 | ✅ | WIP | ✅ | WIP | - | - | - |
 | DeepSeek-R1 | ✅ | WIP | ✅ | WIP | - | - | - |
 
+deepseek.cpp is missing important optimizations for production use (see notes below), but gets pretty close to llama.cpp in single-batch decode speed. Benchmarking DeepSeek-V3-Base with Q2_K quantization on an AWS r6a.12xlarge instance (AMD EPYC 7R13, 2x24 cores, 384GB DDR4 RAM):
+- llama.cpp ([DeepSeek-V3-Q2_K_XS](https://huggingface.co/unsloth/DeepSeek-V3-GGUF/tree/main/DeepSeek-V3-Q2_K_XS) 207GB, tg128, best of 16/24/32/48 threads): 4.57 tok/s
+- deepseek.cpp (Q2_K 207GB, MHA, `-n 128 -L` completion with 16 threads): 4.02 tok/s
+
+A big part of this is that deepseek.cpp uses the llama.cpp vec_dot kernels for Q2_K, so I can't claim to have matched its performance purely through my own ingenuity. But it is surprising given the inference code is much simpler, opting for OpenMP over a [global threadpool with spinlock kernel barriers](https://justine.lol/matmul/#threads). I'm hoping that in addition to serving as a testbed for myself, this gives a good base for others to hack on.
+
 # Instructions
 
 deepseek.cpp requires a computer with a C++20-compatible compiler. You'll also need a directory containing LLM safetensor weights and configuration files in huggingface format, which you'll need to convert by providing a directory into which `.dseek` files containing the converted weights will go. Follow the below to download DeepSeek-V2-Lite, build `deepseek.cpp`, and run it:
