@@ -14,6 +14,7 @@ std::string quant_to_string(Quant quant) {
     case Quant::F16: return "F16";
     case Quant::F8E5M2: return "F8_E5M2";
     case Quant::Q2_K: return "Q2_K";
+    case Quant::Q3_K: return "Q3_K";
   }
   __builtin_unreachable();
 }
@@ -27,6 +28,8 @@ std::optional<Quant> string_to_quant(const std::string& quant_str) {
     return Quant::F8E5M2;
   } else if (quant_str == "Q2_K") {
     return Quant::Q2_K;
+  } else if (quant_str == "Q3_K") {
+    return Quant::Q3_K;
   } else {
     return std::nullopt;
   }
@@ -42,6 +45,7 @@ double bits_per_weight(Quant quant, size_t blockwise_quant_size) {
     case Quant::F16: return 2;
     case Quant::F8E5M2: return (4 + blockwise_quant_size) / blockwise_quant_size;
     case Quant::Q2_K: return 2.5625;
+    case Quant::Q3_K: return 3.4375;
   }
   __builtin_unreachable();
 }
@@ -52,8 +56,13 @@ CodecDType quant_to_codec_dtype(Quant quant) {
     case Quant::F16: return CodecDType::F16;
     case Quant::F8E5M2: return CodecDType::F8E5M2;
     case Quant::Q2_K: return CodecDType::U8;
+    case Quant::Q3_K: return CodecDType::U8;
   }
   __builtin_unreachable();
+}
+
+bool is_k_quant(Quant quant) {
+  return quant == Quant::Q2_K || quant == Quant::Q3_K;
 }
 
 std::string codec_dtype_to_string(CodecDType dtype) {
