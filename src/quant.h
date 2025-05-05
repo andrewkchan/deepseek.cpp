@@ -63,6 +63,42 @@ void quantize_row_q2_K_ref(const float * __restrict__ x, block_q2_K * __restrict
 // - k: number of weights to dequantize (must be a multiple of QK_K)
 void dequantize_row_q2_K(const block_q2_K * __restrict__ x, float * __restrict__ y, int64_t k);
 
+// 3-bit quantization
+// weight is represented as x = a * q
+// 16 blocks of 16 elements each
+// Effectively 3.4375 bits per weight
+typedef struct {
+  uint8_t hmask[QK_K/8]; // quants - high bit
+  uint8_t qs[QK_K/4];    // quants - low 2 bits
+  uint8_t scales[12];    // scales, quantized with 6 bits
+  uint16_t d;           // super-block scale
+} block_q3_K;
+static_assert(sizeof(block_q3_K) == sizeof(uint16_t) + QK_K / 4 + QK_K / 8 + 12, "wrong q3_K block size/padding");
+
+// Quantize an array of weights using Q3_K quantization
+// - x: pointer to the weights to quantize
+// - y: pointer to the quantized weights
+// - k: number of weights to quantize (must be a multiple of QK_K)
+void quantize_row_q3_K_ref(const float * __restrict__ x, block_q3_K * __restrict__ y, int64_t k);
+
+// Dequantize an array of Q3_K quantized weights
+// - x: pointer to the quantized weights
+// - y: pointer to the dequantized weights
+// - k: number of weights to dequantize (must be a multiple of QK_K)
+void dequantize_row_q3_K(const block_q3_K * __restrict__ x, float * __restrict__ y, int64_t k);
+
+// Compute the dot product of two vectors, using Q3_K and Q8_K quantization
+// - n: number of elements in the vectors
+// - s: pointer to the result of the dot product
+// - vx: pointer to the first vector
+// - vy: pointer to the second vector
+void ggml_vec_dot_q3_K_q8_K(
+  int n, 
+  float * __restrict__ s, 
+  const void * __restrict__ vx, 
+  const void * __restrict__ vy
+);
+
 // 8-bit quantization
 // This is only used for intermediate quantization and dot products
 typedef struct {
