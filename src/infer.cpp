@@ -298,6 +298,39 @@ static void matmul(
   }
 }
 
+static void matmul(
+  float* xout, float* x, block_q3_K* w, int n, int d, 
+  const int* unused_block_size, float* unused_scale,
+  void* aqb
+) {
+  // W (d,n) @ x (n,) -> xout (d,)
+  (void)unused_block_size;
+  (void)unused_scale;
+  size_t blocks_per_row = n / QK_K;
+  block_q8_K* aqb_q8 = (block_q8_K*)aqb;
+  int chunk_size = QK_K * 2;
+  int num_chunks = cdiv(n, chunk_size);
+  {
+    PROFILE_BLOCK("quantize_acts");
+    #pragma omp parallel for
+      for (int i = 0; i < num_chunks; i++) {
+        int start = i * chunk_size;
+        int k = (i == num_chunks - 1) ? (n - start) : chunk_size;
+        if (k > 0) {
+          quantize_row_q8_K_ref(x + start, aqb_q8 + (start/QK_K), k);
+        }
+      }
+  }
+  {
+    PROFILE_BLOCK("matmul_w3a8");
+    int i;
+  #pragma omp parallel for private(i)
+    for (i = 0; i < d; i++) {
+      ggml_vec_dot_q3_K_q8_K(n, xout + i, w + i * blocks_per_row, aqb_q8);
+    }
+  }
+}
+
 
 // Compute the softmax of an input vector `x` of length `size` and store it in `o`.
 static void softmax(float* o, float* x, int size) {
@@ -686,8 +719,8 @@ void Block::_block_cpu(
       int expert_scale13_size = _s1 ? cdiv(c.moe_intermediate_size, c.block_size[0]) * cdiv(c.dim, c.block_size[1]) : 0;
       int expert_scale2_size = _s2 ? cdiv(c.dim, c.block_size[0]) * cdiv(c.moe_intermediate_size, c.block_size[1]) : 0;
       size_t weight_offset = expert_index * expert_size;
-      if (c.weight_quant == Quant::Q2_K) {
-        // In Q2_K, each element of the weight tensor is a block of QK_K elements
+      if (is_k_quant(c.weight_quant)) {
+        // In K-quants, each element of the weight tensor is a block of QK_K elements
         weight_offset = weight_offset / QK_K;
       }
       size_t scale13_offset = expert_index * expert_scale13_size;
@@ -977,8 +1010,8 @@ void BlockMLA::_attention_impl(
     float* v_b_head = s.kv_b() + h * c.v_head_dim;
     size_t v_b_head_size = c.v_head_dim * c.kv_lora_rank;
     size_t v_b_head_offset = v_b_head_size * h;
-    if (c.weight_quant == Quant::Q2_K) {
-      // In Q2_K, each element of the weight tensor is a block of QK_K elements
+    if (is_k_quant(c.weight_quant)) {
+      // In k-quants, each element of the weight tensor is a block of QK_K elements
       v_b_head_offset = v_b_head_offset / QK_K;
     }
     T* wv_b_head = wv_b<T>() + v_b_head_offset;
@@ -1105,6 +1138,12 @@ void Model::_copy_embedding(InferenceState& s, int token) {
       dequantize_row_q2_K(emb + token * blocks_per_row, s.x(), c.dim);
       break;
     }
+    case Quant::Q3_K: {
+      block_q3_K* emb = static_cast<block_q3_K*>(token_embedding_table);
+      int blocks_per_row = c.dim / QK_K;
+      dequantize_row_q3_K(emb + token * blocks_per_row, s.x(), c.dim);
+      break;
+    }
     default: {
       assert(false && "unsupported weight quantization");
     }
@@ -1160,6 +1199,10 @@ void Model::_forward_cpu(InferenceState& s, int token, int pos, InferenceMode mo
       }
       case Quant::Q2_K: {
         matmul(s.logits(), s.x(), static_cast<block_q2_K*>(wcls), c.dim, c.vocab_size, c.block_size.data(), scls, s.aqb());
+        break;
+      }
+      case Quant::Q3_K: {
+        matmul(s.logits(), s.x(), static_cast<block_q3_K*>(wcls), c.dim, c.vocab_size, c.block_size.data(), scls, s.aqb());
         break;
       }
       default: {

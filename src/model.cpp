@@ -105,6 +105,8 @@ void Config::from_yalm(YALMData& yalm, int context) {
     weight_quant = Quant::F8E5M2;
   } else if (quant == "q2_k") {
     weight_quant = Quant::Q2_K;
+  } else if (quant == "q3_k") {
+    weight_quant = Quant::Q3_K;
   } else {
     std::cerr << "FATAL: unsupported quant: " << quant << std::endl;
     assert(false);
@@ -177,15 +179,26 @@ void* check_tensor(const Tensor* tensor, Quant weight_quant, std::array<int, 4> 
   }
   CodecDType expected_dtype = quant_to_codec_dtype(weight_quant);
   std::array<int, 4> expected_shape = shape;
-  if (weight_quant == Quant::Q2_K) {
+  if (is_k_quant(weight_quant)) {
     size_t numel = 1;
     for (int i = 0; i < 4; i++) {
       if (shape[i] > 0) {
         numel *= shape[i];
       }
     }
+    size_t block_size = sizeof(block_q2_K);
+    switch (weight_quant) {
+      case Quant::Q2_K: {
+        block_size = sizeof(block_q2_K);
+        break;
+      }
+      case Quant::Q3_K: {
+        block_size = sizeof(block_q3_K);
+        break;
+      }
+    }
     size_t total_blocks = numel / QK_K;
-    size_t total_bytes = total_blocks * sizeof(block_q2_K);
+    size_t total_bytes = total_blocks * block_size;
     if (tensor->dtype != expected_dtype || tensor->size != total_bytes) {
       std::cerr << "FATAL: tensor mismatch for " << tensor->name << std::endl;
       std::cerr 
@@ -261,7 +274,8 @@ Block::Block(
     case Quant::F32:
     case Quant::F16:
     case Quant::F8E5M2:
-    case Quant::Q2_K: {
+    case Quant::Q2_K:
+    case Quant::Q3_K: {
       break;
     }
     default: {
@@ -401,6 +415,9 @@ void Block::block(
         break;
       case Quant::Q2_K:
         _block_cpu<block_q2_K>(s, pos, kv_sink, kv_pos, kv_len);
+        break;
+      case Quant::Q3_K:
+        _block_cpu<block_q3_K>(s, pos, kv_sink, kv_pos, kv_len);
         break;
       default:
         assert(false && "unsupported weight quantization for cpu");
@@ -542,6 +559,9 @@ void BlockMHA::attention_impl(
     case Quant::Q2_K:
       _attention_impl<block_q2_K>(s, pos, kv_sink, kv_pos, kv_len);
       break;
+    case Quant::Q3_K:
+      _attention_impl<block_q3_K>(s, pos, kv_sink, kv_pos, kv_len);
+      break;
     default:
       assert(false && "unsupported weight quantization for mha");
   }
@@ -672,6 +692,9 @@ void BlockMLA::attention_impl(
       break;
     case Quant::Q2_K:
       _attention_impl<block_q2_K>(s, pos, kv_sink, kv_pos, kv_len);
+      break;
+    case Quant::Q3_K:
+      _attention_impl<block_q3_K>(s, pos, kv_sink, kv_pos, kv_len);
       break;
     default:
       assert(false && "unsupported weight quantization for mla");

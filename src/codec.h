@@ -81,12 +81,14 @@ enum class Quant {
   F16,
   F8E5M2,
   Q2_K, // 2-bit llama.cpp K-quants
+  Q3_K, // 3-bit llama.cpp K-quants
 };
 
 std::string quant_to_string(Quant quant);
 std::optional<Quant> string_to_quant(const std::string& quant_str);
 double bits_per_weight(Quant quant, size_t blockwise_quant_size);
 CodecDType quant_to_codec_dtype(Quant quant);
+bool is_k_quant(Quant quant);
 
 struct Tensor {
   std::string name;
