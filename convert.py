@@ -12,7 +12,7 @@ import safetensors
 from safetensors.torch import save_file
 import torch
 
-from quantizer import quantize_q2_k
+from quantizer import k_quantize
 
 from typing import Tuple, List, Literal
 import dataclasses
@@ -30,7 +30,7 @@ class BlockQuant:
 
 @dataclasses.dataclass
 class KQuant:
-  name: Literal["q2_k"]
+  name: Literal["q2_k", "q3_k"]
   dtype: torch.dtype
 
 Quant = BlockQuant | KQuant
@@ -40,6 +40,7 @@ SUPPORTED_QUANTS = {
   "fp16": BlockQuant(name="fp16", block_size=None, dtype=torch.float16),
   "f8e5m2": BlockQuant(name="f8e5m2", block_size=(128, 128), dtype=torch.float8_e5m2),
   "q2_k": KQuant(name="q2_k", dtype=torch.uint8),
+  "q3_k": KQuant(name="q3_k", dtype=torch.uint8),
 }
 
 class Metadata:
@@ -252,12 +253,6 @@ def blockwise_quantize(weight: torch.Tensor, block_size: torch.Tensor, dtype: to
       scale[i, j] = scale_block
   return out, scale
 
-def k_quantize(weight: torch.Tensor, method: Literal["q2_k"]) -> torch.Tensor:
-  if method == "q2_k":
-    return quantize_q2_k(weight)
-  else:
-    raise ValueError(f"Unsupported quantization method: {method}")
-
 def per_expert_blockwise_quantize(expert_weights: torch.Tensor, block_size: torch.Tensor, dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
   assert expert_weights.ndim == 3
   num_experts = expert_weights.shape[0]
@@ -269,7 +264,7 @@ def per_expert_blockwise_quantize(expert_weights: torch.Tensor, block_size: torc
     scales.append(scale)
   return torch.stack(output_weights), torch.stack(scales)
 
-def per_expert_k_quantize(expert_weights: torch.Tensor, method: Literal["q2_k"]) -> torch.Tensor:
+def per_expert_k_quantize(expert_weights: torch.Tensor, method: Literal["q2_k", "q3_k"]) -> torch.Tensor:
   assert expert_weights.ndim == 3
   num_experts = expert_weights.shape[0]
   output_weights = []
