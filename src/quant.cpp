@@ -437,8 +437,8 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * __restrict__ s, const void * __restri
   const uint32_t kmask1 = 0x03030303;
   const uint32_t kmask2 = 0x0f0f0f0f;
 
-  const block_q3_K * __restrict__ x = vx;
-  const block_q8_K * __restrict__ y = vy;
+  const block_q3_K * __restrict__ x = (const block_q3_K*)vx;
+  const block_q8_K * __restrict__ y = (const block_q8_K*)vy;
 
   const int nb = n / QK_K;
 

@@ -196,6 +196,7 @@ void* check_tensor(const Tensor* tensor, Quant weight_quant, std::array<int, 4> 
         block_size = sizeof(block_q3_K);
         break;
       }
+      default: {}
     }
     size_t total_blocks = numel / QK_K;
     size_t total_bytes = total_blocks * block_size;
