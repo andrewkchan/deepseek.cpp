@@ -1,5 +1,4 @@
 #include <torch/extension.h>
-#include <vector>
 #include "quant.h"
 
 torch::Tensor quantize_q2_k(torch::Tensor& input) {

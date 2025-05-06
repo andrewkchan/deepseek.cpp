@@ -1092,16 +1092,19 @@ template void Block::_block_cpu<float>(InferenceState&, int, int, int, int) cons
 template void Block::_block_cpu<f16_t>(InferenceState&, int, int, int, int) const;
 template void Block::_block_cpu<f8e5m2_t>(InferenceState&, int, int, int, int) const;
 template void Block::_block_cpu<block_q2_K>(InferenceState&, int, int, int, int) const;
+template void Block::_block_cpu<block_q3_K>(InferenceState&, int, int, int, int) const;
 
 template void BlockMHA::_attention_impl<float>(InferenceState&, int, int, int, int) const;
 template void BlockMHA::_attention_impl<f16_t>(InferenceState&, int, int, int, int) const;
 template void BlockMHA::_attention_impl<f8e5m2_t>(InferenceState&, int, int, int, int) const;
 template void BlockMHA::_attention_impl<block_q2_K>(InferenceState&, int, int, int, int) const;
+template void BlockMHA::_attention_impl<block_q3_K>(InferenceState&, int, int, int, int) const;
 
 template void BlockMLA::_attention_impl<float>(InferenceState&, int, int, int, int) const;
 template void BlockMLA::_attention_impl<f16_t>(InferenceState&, int, int, int, int) const;
 template void BlockMLA::_attention_impl<f8e5m2_t>(InferenceState&, int, int, int, int) const;
 template void BlockMLA::_attention_impl<block_q2_K>(InferenceState&, int, int, int, int) const;
+template void BlockMLA::_attention_impl<block_q3_K>(InferenceState&, int, int, int, int) const;
 
 void Model::_copy_embedding(InferenceState& s, int token) {
   const Config& c = *config;
