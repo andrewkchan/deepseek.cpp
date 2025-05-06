@@ -12,13 +12,13 @@ Since this program only supports DeepSeek, it's tiny compared to other inference
 
 Quantizations other than FP32 require AVX2 and F16C support.
 
-| Model      | Q2_K | Q4_K | F8E5M2 | F8E4M3 | FP16 | BF16 | FP32 |
-| -----      | ---- | ---- | ------ | ------ | ---- | ---- | ---- |
-| DeepSeek-V2-Lite | ✅ | WIP | ✅ | WIP | ✅ | WIP | ✅ |
-| DeepSeek-V2 | ✅ | WIP | ✅ | WIP | ✅ | WIP | ✅ |
-| DeepSeek-V2.5 | ✅ | WIP | ✅ | WIP | ✅ | WIP | ✅ |
-| DeepSeek-V3 | ✅ | WIP | ✅ | WIP | - | - | - |
-| DeepSeek-R1 | ✅ | WIP | ✅ | WIP | - | - | - |
+| Model      | Q2_K | Q3_K | Q4_K | F8E5M2 | F8E4M3 | FP16 | BF16 | FP32 |
+| -----      | ---- | ---- | ------ | ------ | ---- | ---- | ---- | ---- |
+| DeepSeek-V2-Lite | ✅ | ✅ | WIP | ✅ | WIP | ✅ | WIP | ✅ |
+| DeepSeek-V2 | ✅ | ✅ | WIP | ✅ | WIP | ✅ | WIP | ✅ |
+| DeepSeek-V2.5 | ✅ | ✅ | WIP | ✅ | WIP | ✅ | WIP | ✅ |
+| DeepSeek-V3 | ✅ | ✅ | WIP | ✅ | WIP | - | - | - |
+| DeepSeek-R1 | ✅ | ✅ | WIP | ✅ | WIP | - | - | - |
 
 deepseek.cpp is missing important optimizations for production use (see notes below), but gets pretty close to llama.cpp in single-batch decode speed. Benchmarking DeepSeek-V3-Base with Q2_K quantization on an AWS r6a.12xlarge instance (AMD EPYC 7R13, 2x24 cores, 384GB DDR4 RAM):
 - llama.cpp ([DeepSeek-V3-Q2_K_XS](https://huggingface.co/unsloth/DeepSeek-V3-GGUF/tree/main/DeepSeek-V3-Q2_K_XS) 207GB, tg128, best of 16/24/32/48 threads): 4.57 tok/s
