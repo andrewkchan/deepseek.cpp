@@ -520,7 +520,7 @@ void mha_cpu(
   f16_t* kb,    // (max_seq_len, n_heads, head_dim)
   f16_t* vb,    // (max_seq_len, n_heads, head_dim)
   float* q,     // (n_heads, head_dim)
-  int head_dim, int v_head_dim, int kv_len, int max_seq_len, int n_heads, int n_heads
+  int head_dim, int v_head_dim, int kv_len, int max_seq_len, int n_heads
 );
 
 void matmul_unscaled(float* xout, float* x, float* w, int n, int d);
