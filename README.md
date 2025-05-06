@@ -8,7 +8,9 @@ I was initially adding DeepSeek support to `yalm` but realized that the changes 
 
 Since this program only supports DeepSeek, it's tiny compared to other inference engines (<2k LOC not including `fmt` and `json`, vs. >250k for llama.cpp and vllm) and is extra hackable. I'm currently using it as a testbed to study single-batch DeepSeek decoding performance on CPU.
 
-## Model support
+## Model and hardware support
+
+Quantizations other than FP32 require AVX2 and F16C support.
 
 | Model      | Q2_K | Q4_K | F8E5M2 | F8E4M3 | FP16 | BF16 | FP32 |
 | -----      | ---- | ---- | ------ | ------ | ---- | ---- | ---- |
