@@ -7,6 +7,7 @@
 struct Sampler {
   int vocab_size;
 
+  Sampler() = default;
   Sampler(const std::shared_ptr<Config> config, uint64_t seed);
 
   // Return the probability score corresponding to `logits[index]`.

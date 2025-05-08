@@ -92,6 +92,7 @@ struct Config {
 // Members are reused across subsequent blocks and passes.
 // This lets us avoid allocations during inference.
 struct InferenceState {
+  InferenceState() = default;
   InferenceState(const std::shared_ptr<Config> config);
   ~InferenceState();
 
@@ -468,6 +469,7 @@ struct Model {
   void* wcls = nullptr; // (vocab_size, dim)
   float* scls = nullptr;
 
+  Model() = default;
   Model(YALMData& yalm, int context = 0);
   
   void forward(InferenceState& s, int token, int pos, InferenceMode mode = InferenceMode::OUTPUT_LOGITS);

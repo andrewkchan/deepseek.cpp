@@ -21,7 +21,7 @@ void error_usage() {
   fprintf(stderr, "Options:\n");
   fprintf(stderr, "  -h Display this help message\n");
   fprintf(stderr, "  -L Locks model weights to RAM, disabling swap. Requires sudo.\n");
-  fprintf(stderr, "  -m [completion,passkey,perplexity] which mode to run in (default - completion)\n");
+  fprintf(stderr, "  -m [completion,passkey,perplexity,interactive] which mode to run in (default - completion)\n");
   fprintf(stderr, "  -T <int> sliding window context length (0 - max)\n");
   fprintf(stderr, "\n");
   fprintf(stderr, "Perplexity mode options:\n");
@@ -40,20 +40,214 @@ void error_usage() {
   exit(1);
 }
 
-void run_completion(
-  const std::string& checkpoint_dir,
-  const std::string& prompt,
-  const int context,
-  int num_steps,
-  float temperature,
-  bool lock_model_weights
-) {
+void help_usage_interactive() {
+  fprintf(stderr, "Usage:   <mode> [options]\n");
+  fprintf(stderr, "Example: c -i \"Q: What is the meaning of life?\"\n");
+  fprintf(stderr, "Modes:\n");
+  fprintf(stderr, "  h Display this help message\n");
+  fprintf(stderr, "  c Completion - complete a single prompt \n");
+  fprintf(stderr, "  p Perplexity - compute perplexity of a single prompt \n");
+  fprintf(stderr, "  k Passkey - test passkey extraction \n");
+  fprintf(stderr, "\n");
+  fprintf(stderr, "Perplexity mode options:\n");
+  fprintf(stderr, "  Choose one:\n");
+  fprintf(stderr, "    -i <string> input prompt\n");
+  fprintf(stderr, "    -f <filepath> input file with prompt\n");
+  fprintf(stderr, "Completion mode options:\n");
+  fprintf(stderr, "  -n <int>    number of steps to run for in completion mode, default 256. 0 = max_seq_len, -1 = infinite\n");
+  fprintf(stderr, "  Choose one:\n");
+  fprintf(stderr, "    -i <string> input prompt\n");
+  fprintf(stderr, "    -t <float> temperature (default - 1.0)\n");
+  fprintf(stderr, "    -f <filepath> input file with prompt\n");
+  fprintf(stderr, "Passkey mode options:\n");
+  fprintf(stderr, "  -n <int>    number of junk lines to insert (default - 250)\n");
+  fprintf(stderr, "  -l <int>    passkey position (-1 - random)\n");
+}
+
+struct Session {
+  Session(const std::string& checkpoint_dir, bool lock_model_weights, int context, uint64_t sampler_seed) {
+    model_data.from_directory(checkpoint_dir, lock_model_weights);
+    model = std::move(Model(model_data, context));
+    state = std::move(InferenceState(model.config));
+    sampler = std::move(Sampler(model.config, sampler_seed));
+    tokenizer = std::move(Tokenizer(model_data));
+  }
   YALMData model_data;
-  model_data.from_directory(checkpoint_dir, lock_model_weights);
-  Model model(model_data, context);
-  InferenceState state(model.config);
-  Sampler sampler(model.config, get_timestamp_ms());
-  Tokenizer tokenizer(model_data);
+  Model model;
+  InferenceState state;
+  Sampler sampler;
+  Tokenizer tokenizer;
+};
+
+struct CompletionArgs {
+  std::string prompt;
+  int num_steps;
+  float temperature;
+  // Returns true if args are valid, false otherwise
+  bool parse_args(const std::vector<const char*>& args) {
+    std::string prompt_path = "";
+    for (size_t i = 0; i < args.size();) {
+      // do some basic validation
+      if (args[i][0] != '-') {
+        return false;
+      } // must start with dash
+      if (strlen(args[i]) != 2) {
+        return false;
+      } // must be -x (one dash, one letter)
+
+      // read in the args
+      if (args[i][1] == 'h') {
+        return false;
+      } else if (args[i][1] == 'i') {
+        if (i + 1 >= args.size()) {
+          return false;
+        }
+        prompt = args[i + 1];
+        i += 2;
+      } else if (args[i][1] == 't') {
+        if (i + 1 >= args.size()) {
+          return false;
+        }
+        temperature = std::stof(args[i + 1]);
+        i += 2;
+      } else if (args[i][1] == 'f') {
+        if (i + 1 >= args.size()) {
+          return false;
+        }
+        prompt_path = args[i + 1];
+        i += 2;
+      } else if (args[i][1] == 'n') {
+        if (i + 1 >= args.size()) {
+          return false;
+        }
+        num_steps = std::stoi(args[i + 1]);
+        i += 2;
+      } else {
+        return false;
+      }
+    }
+    int has_prompt = prompt.size() > 0 ? 1 : 0;
+    int has_prompt_path = prompt_path.size() > 0 ? 1 : 0;
+    if ((has_prompt + has_prompt_path) != 1) {
+      return false;
+    } else if (has_prompt_path) {
+      std::ifstream file(prompt_path);
+      if (!file.is_open()) {
+        std::cerr << "Error: could not open file " << prompt_path << std::endl;
+        return false;
+      }
+
+      std::stringstream buffer;
+      buffer << file.rdbuf();
+      prompt = buffer.str();
+    }
+    return true;
+  }
+};
+
+struct PasskeyArgs {
+  int n_junk;
+  int passkey_pos;
+  // Returns true if args are valid, false otherwise
+  bool parse_args(const std::vector<const char*>& args) {
+    for (size_t i = 2; i < args.size();) {
+      // do some basic validation
+      if (args[i][0] != '-') {
+        return false;
+      } // must start with dash
+      if (strlen(args[i]) != 2) {
+        return false;
+      } // must be -x (one dash, one letter)
+
+      // read in the args
+      if (args[i][1] == 'h') {
+        return false;
+      } else if (args[i][1] == 'l') {
+        if (i + 1 >= args.size()) {
+          return false;
+        }
+        passkey_pos = std::stoi(args[i + 1]);
+        i += 2;
+      } else if (args[i][1] == 'n') {
+        if (i + 1 >= args.size()) {
+          return false;
+        }
+        n_junk = std::stoi(args[i + 1]);
+        i += 2;
+      } else {
+        return false;
+      }
+    }
+    if (passkey_pos != -1 && (passkey_pos >= n_junk || passkey_pos < 0)) {
+      std::cerr << "Error: passkey position must be between 0 and " << n_junk - 1 << std::endl;
+      return false;
+    }
+    return true;
+  }
+};
+
+struct PerplexityArgs {
+  std::string prompt;
+  // Returns true if args are valid, false otherwise
+  bool parse_args(const std::vector<const char*>& args) {
+    std::string prompt_path = "";
+    for (size_t i = 0; i < args.size();) {
+      // do some basic validation
+      if (args[i][0] != '-') {
+        return false;
+      } // must start with dash
+      if (strlen(args[i]) != 2) {
+        return false;
+      } // must be -x (one dash, one letter)
+
+      // read in the args
+      if (args[i][1] == 'h') {
+        return false;
+      } else if (args[i][1] == 'i') {
+        if (i + 1 >= args.size()) {
+          return false;
+        }
+        prompt = args[i + 1];
+        i += 2;
+      } else if (args[i][1] == 'f') {
+        if (i + 1 >= args.size()) {
+          return false;
+        }
+        prompt_path = args[i + 1];
+        i += 2;
+      } else {
+        return false;
+      }
+    }
+    int has_prompt = prompt.size() > 0 ? 1 : 0;
+    int has_prompt_path = prompt_path.size() > 0 ? 1 : 0;
+    if ((has_prompt + has_prompt_path) != 1) {
+      return false;
+    } else if (has_prompt_path) {
+      std::ifstream file(prompt_path);
+      if (!file.is_open()) {
+        std::cerr << "Error: could not open file " << prompt_path << std::endl;
+        return false;
+      }
+
+      std::stringstream buffer;
+      buffer << file.rdbuf();
+      prompt = buffer.str();
+    }
+    return true;
+  }
+};
+
+void run_completion(
+  Session& session,
+  const std::string& prompt,
+  int num_steps,
+  float temperature
+) {
+  Model& model = session.model;
+  InferenceState& state = session.state;
+  Sampler& sampler = session.sampler;
+  Tokenizer& tokenizer = session.tokenizer;
 
   std::cout << "Model active bytes with full context window: " << model.config->active_bytes(model.config->max_seq_len) << std::endl;
   std::cout << "Model active bytes with no context: " << model.config->active_bytes(0) << std::endl;
@@ -145,17 +339,13 @@ void run_completion(
 }
 
 void run_perplexity(
-  const std::string& checkpoint_dir,
-  const std::string& prompt,
-  const int context,
-  bool lock_model_weights
+  Session& session,
+  const std::string& prompt
 ) {
-  YALMData model_data;
-  model_data.from_directory(checkpoint_dir, lock_model_weights);
-  Model model(model_data, context);
-  InferenceState state(model.config);
-  Sampler sampler(model.config, get_timestamp_ms());
-  Tokenizer tokenizer(model_data);
+  Model& model = session.model;
+  InferenceState& state = session.state;
+  Sampler& sampler = session.sampler;
+  Tokenizer& tokenizer = session.tokenizer;
 
   std::cout << "Model active bytes with full context window: " << model.config->active_bytes(model.config->max_seq_len) << std::endl;
 
@@ -229,18 +419,14 @@ void run_perplexity(
 }
 
 void run_passkey(
-  const std::string& checkpoint_dir,
-  const int context,
+  Session& session,
   const int n_junk,
-  const int passkey_pos,
-  bool lock_model_weights
+  const int passkey_pos
 ) {
-  YALMData model_data;
-  model_data.from_directory(checkpoint_dir, lock_model_weights);
-  Model model(model_data, context);
-  InferenceState state(model.config);
-  Sampler sampler(model.config, get_timestamp_ms());
-  Tokenizer tokenizer(model_data);
+  Model& model = session.model;
+  InferenceState& state = session.state;
+  Sampler& sampler = session.sampler;
+  Tokenizer& tokenizer = session.tokenizer;
 
   std::cout << "Model active bytes with full context window: " << model.config->active_bytes(model.config->max_seq_len) << std::endl;
 
@@ -313,126 +499,145 @@ void run_passkey(
   std::cout << std::endl;
 }
 
+void run_interactive(Session& session) {
+  std::string input = "";
+  while (true) {
+    std::cout << "> " << std::flush;
+    std::getline(std::cin, input);
+    if (input == "exit") {
+      break;
+    }
+    // Split string by space
+    std::vector<std::string> arg_strs;
+    std::stringstream ss(input);
+    std::string arg;
+    while (ss >> arg) {
+      arg_strs.push_back(arg);
+    }
+    if (arg_strs.size() == 0) {
+      help_usage_interactive();
+      continue;
+    }
+    std::string mode = arg_strs[0];
+    if (std::string("completion").starts_with(mode)) {
+      mode = "completion";
+    } else if (std::string("passkey").starts_with(mode) && mode != "p") {
+      mode = "passkey";
+    } else if (std::string("perplexity").starts_with(mode) && mode != "p") {
+      mode = "perplexity";
+    } else if (std::string("interactive").starts_with(mode)) {
+      mode = "interactive";
+    } else {
+      help_usage_interactive();
+      continue;
+    }
+    std::vector<const char*> args;
+    for (const auto& arg_str : arg_strs) {
+      args.push_back(arg_str.c_str());
+    }
+    if (mode == "completion") {
+      CompletionArgs completion_args;
+      if (!completion_args.parse_args(args)) {
+        help_usage_interactive();
+        continue;
+      }
+      run_completion(session, completion_args.prompt, completion_args.num_steps, completion_args.temperature);
+    } else if (mode == "passkey") {
+      PasskeyArgs passkey_args;
+      if (!passkey_args.parse_args(args)) {
+        help_usage_interactive();
+        continue;
+      }
+      run_passkey(session, passkey_args.n_junk, passkey_args.passkey_pos);
+    } else if (mode == "perplexity") {
+      PerplexityArgs perplexity_args;
+      if (!perplexity_args.parse_args(args)) {
+        help_usage_interactive();
+        continue;
+      }
+      run_perplexity(session, perplexity_args.prompt);
+    }
+  }
+}
+
 int main(int argc, char* argv[]) {
+  std::vector<const char*> args(argv, argv + argc);
+  std::vector<const char*> next_args;
+
   std::string checkpoint_dir = "";    // e.g. out/model.bin
   // Options
-  std::string mode = "completion";     // completion, passkey, or perplexity
-  std::string prompt = "";             // prompt string
-  std::string prompt_path = "";        // prompt file path
+  std::string mode = "completion";     // completion, passkey, perplexity, or interactive
   int context = 0;
   bool lock_model_weights = false;
-  // Completion mode options
-  int num_steps = 256;                 // number of steps to run for
-  float temperature = 1.0;             // temperature
-  // Passkey mode options
-  int n_junk = 250;                   // number of junk lines to insert
-  int passkey_pos = -1;                 // passkey position (-1 - random)
 
-  if (argc >= 2) {
-    checkpoint_dir = argv[1];
+  if (args.size() >= 2) {
+    checkpoint_dir = args[1];
   } else {
     error_usage();
   }
-  for (int i = 2; i < argc;) {
-    // do some basic validation
-    if (argv[i][0] != '-') {
-      error_usage();
-    } // must start with dash
-    if (strlen(argv[i]) != 2) {
-      error_usage();
-    } // must be -x (one dash, one letter)
 
-    // read in the args
-    if (argv[i][1] == 'h') {
-      error_usage();
-    } else if (argv[i][1] == 'L') {
-      lock_model_weights = true;
-      i += 1;
-    } else if (argv[i][1] == 'm') {
-      if (i + 1 >= argc) {
+  // read in session args first, put everything else in next_args
+  for (size_t i = 2; i < args.size();) {
+    if (args[i][0] == '-' && strlen(args[i]) == 2) {
+      if (args[i][1] == 'h') {
         error_usage();
-      }
-      mode = argv[i + 1];
-      if (std::string("completion").starts_with(mode)) {
-        mode = "completion";
-      } else if (std::string("passkey").starts_with(mode)) {
-        mode = "passkey";
-      } else if (std::string("perplexity").starts_with(mode)) {
-        mode = "perplexity";
+      } else if (args[i][1] == 'L') {
+        lock_model_weights = true;
+        i += 1;
+      } else if (args[i][1] == 'm') {
+        if (i + 1 >= args.size()) {
+          error_usage();
+        }
+        mode = args[i + 1];
+        if (std::string("completion").starts_with(mode)) {
+          mode = "completion";
+        } else if (std::string("passkey").starts_with(mode) && mode != "p") {
+          mode = "passkey";
+        } else if (std::string("perplexity").starts_with(mode) && mode != "p") {
+          mode = "perplexity";
+        } else if (std::string("interactive").starts_with(mode)) {
+          mode = "interactive";
+        } else {
+          error_usage();
+        }
+        i += 2;
       } else {
-        error_usage();
+        next_args.push_back(args[i]);
+        i += 1;
       }
-      i += 2;
-    } else if (argv[i][1] == 'i') {
-      if (i + 1 >= argc) {
-        error_usage();
-      }
-      prompt = argv[i + 1];
-      i += 2;
-    } else if (argv[i][1] == 't') {
-      if (i + 1 >= argc) {
-        error_usage();
-      }
-      temperature = std::stof(argv[i + 1]);
-      i += 2;
-    } else if (argv[i][1] == 'f') {
-      if (i + 1 >= argc) {
-        error_usage();
-      }
-      prompt_path = argv[i + 1];
-      i += 2;
-    } else if (argv[i][1] == 'T') {
-      if (i + 1 >= argc) {
-        error_usage();
-      }
-      context = std::stoi(argv[i + 1]);
-      i += 2;
-    } else if (argv[i][1] == 'l') {
-      if (i + 1 >= argc) {
-        error_usage();
-      }
-      passkey_pos = std::stoi(argv[i + 1]);
-      i += 2;
-    } else if (argv[i][1] == 'n') {
-      if (i + 1 >= argc) {
-        error_usage();
-      }
-      num_steps = std::stoi(argv[i + 1]);
-      n_junk = num_steps;
-      i += 2;
     } else {
-      error_usage();
-    }
-  }
-  int has_prompt = prompt.size() > 0 ? 1 : 0;
-  int has_prompt_path = prompt_path.size() > 0 ? 1 : 0;
-  if (mode == "completion" || mode == "perplexity") {
-    if ((has_prompt + has_prompt_path) != 1) {
-      error_usage();
-    } else if (has_prompt_path) {
-      std::ifstream file(prompt_path);
-      if (!file.is_open()) {
-        std::cerr << "Error: could not open file " << prompt_path << std::endl;
-        return 1;
-      }
-
-      std::stringstream buffer;
-      buffer << file.rdbuf();
-      prompt = buffer.str();
-    }
-  } else {
-    if (passkey_pos != -1 && (passkey_pos >= n_junk || passkey_pos < 0)) {
-      std::cerr << "Error: passkey position must be between 0 and " << n_junk - 1 << std::endl;
-      return 1;
+      next_args.push_back(args[i]);
+      i += 1;
     }
   }
 
   if (mode == "completion") {
-    run_completion(checkpoint_dir, prompt, context, num_steps, temperature, lock_model_weights);
+    CompletionArgs completion_args;
+    if (!completion_args.parse_args(next_args)) {
+      error_usage();
+    }
+    Session session(checkpoint_dir, lock_model_weights, context, get_timestamp_ms());
+    run_completion(session, completion_args.prompt, completion_args.num_steps, completion_args.temperature);
   } else if (mode == "passkey") {
-    run_passkey(checkpoint_dir, context, n_junk, passkey_pos, lock_model_weights);
+    PasskeyArgs passkey_args;
+    if (!passkey_args.parse_args(next_args)) {
+      error_usage();
+    }
+    Session session(checkpoint_dir, lock_model_weights, context, get_timestamp_ms());
+    run_passkey(session, passkey_args.n_junk, passkey_args.passkey_pos);
   } else if (mode == "perplexity") {
-    run_perplexity(checkpoint_dir, prompt, context, lock_model_weights);
+    PerplexityArgs perplexity_args;
+    if (!perplexity_args.parse_args(next_args)) {
+      error_usage();
+    }
+    Session session(checkpoint_dir, lock_model_weights, context, get_timestamp_ms());
+    run_perplexity(session, perplexity_args.prompt);
+  } else if (mode == "interactive") {
+    if (next_args.size() != 0) {
+      error_usage();
+    }
+    Session session(checkpoint_dir, lock_model_weights, context, get_timestamp_ms());
+    run_interactive(session);
   }
 
   return 0;
