@@ -5,7 +5,7 @@
 
 Sampler::Sampler(const std::shared_ptr<Config> config, uint64_t seed) {
   vocab_size = config->vocab_size;
-  std::srand(seed);
+  std::srand(seed); // TODO: use random_device
 }
 
 float Sampler::sample_prob(int index, const InferenceState& s) {
