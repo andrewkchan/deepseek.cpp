@@ -105,6 +105,9 @@ struct YALMData {
   json metadata;
   std::unordered_map<std::string, Tensor> tensors;
 
+  YALMData(const std::string& dirname, bool lock_model_weights);
+
+private:
   // Update YALMData with tensors from a file
   // If read_metadata is true, also update metadata from this file
   // Returns 0 if successful, other if failed

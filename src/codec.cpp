@@ -161,6 +161,13 @@ int Tensor::from_json(const std::string& name, const json& val, void* bytes_ptr,
   return 0;
 }
 
+YALMData::YALMData(const std::string& dirname, bool lock_model_weights) {
+  if (from_directory(dirname, lock_model_weights) != 0) {
+    std::cerr << "failed to load YALMData from directory" << std::endl;
+    assert(false);
+  }
+}
+
 int YALMData::update_from_file(const std::string& filename, bool read_metadata, bool lock_model_weights) {
   std::cout << "loading data from file: " << filename << std::endl;
   int fd = open(filename.c_str(), O_RDONLY);
