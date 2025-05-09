@@ -64,7 +64,6 @@ struct Tokenizer {
   // TODO: use constexpr?
   std::string byte_pieces[256];
 
-  Tokenizer() = default;
   Tokenizer(const YALMData& data);
 
   std::vector<int> encode(const std::string& text, bool encode_bos) const;

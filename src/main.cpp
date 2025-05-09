@@ -65,13 +65,12 @@ void help_usage_interactive() {
 }
 
 struct Session {
-  Session(const std::string& checkpoint_dir, bool lock_model_weights, int context, uint64_t sampler_seed) {
-    model_data.from_directory(checkpoint_dir, lock_model_weights);
-    model = std::move(Model(model_data, context));
-    state = std::move(InferenceState(model.config));
-    sampler = std::move(Sampler(model.config, sampler_seed));
-    tokenizer = std::move(Tokenizer(model_data));
-  }
+  Session(const std::string& checkpoint_dir, bool lock_model_weights, int context, uint64_t sampler_seed):
+    model_data(checkpoint_dir, lock_model_weights),
+    model(model_data, context),
+    state(model.config),
+    sampler(model.config, sampler_seed),
+    tokenizer(model_data) {}
   YALMData model_data;
   Model model;
   InferenceState state;
