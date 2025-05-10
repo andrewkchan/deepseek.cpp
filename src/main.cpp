@@ -511,7 +511,16 @@ void run_interactive(Session& session) {
     std::stringstream ss(input);
     std::string arg;
     while (ss >> arg) {
-      arg_strs.push_back(arg);
+      if (arg_strs.size() > 0 && arg_strs[arg_strs.size() - 1].starts_with("\"") && !arg_strs[arg_strs.size() - 1].ends_with("\"")) {
+        // Double quotes enclose strings that can contain spaces
+        arg_strs[arg_strs.size() - 1] += " " + arg;
+        if (arg.ends_with("\"")) {
+          // Remove the double quotes
+          arg_strs[arg_strs.size() - 1] = arg_strs[arg_strs.size() - 1].substr(1, arg_strs[arg_strs.size() - 1].size() - 2);
+        }
+      } else {
+        arg_strs.push_back(arg);
+      }
     }
     if (arg_strs.size() == 0) {
       help_usage_interactive();
@@ -531,8 +540,8 @@ void run_interactive(Session& session) {
       continue;
     }
     std::vector<const char*> args;
-    for (const auto& arg_str : arg_strs) {
-      args.push_back(arg_str.c_str());
+    for (size_t i = 1; i < arg_strs.size(); i++) {
+      args.push_back(arg_strs[i].c_str());
     }
     if (mode == "completion") {
       CompletionArgs completion_args;
