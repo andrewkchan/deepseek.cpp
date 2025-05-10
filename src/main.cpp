@@ -81,7 +81,7 @@ struct Session {
 struct CompletionArgs {
   std::string prompt;
   int num_steps;
-  float temperature;
+  float temperature = 1.0;
   // Returns true if args are valid, false otherwise
   bool parse_args(const std::vector<const char*>& args) {
     std::string prompt_path = "";
