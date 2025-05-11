@@ -55,7 +55,7 @@ Example: main model_weights_dir/ -i "Q: What is the meaning of life?"
 Options:
   -h Display this help message
   -L Locks model weights to RAM, disabling swap. Requires sudo.
-  -m [completion,passkey,perplexity] which mode to run in (default - completion)
+  -m [completion,passkey,perplexity,interactive] which mode to run in (default - completion)
   -T <int> sliding window context length (0 - max)
 
 Perplexity mode options:
@@ -83,7 +83,7 @@ The default OpenMP thread count can result in severely degraded throughput, like
 ## Notes
 
 - `--quant=f8e5m2` specifies model weight quantization using 128x128 blocks. MoE gates and layer norms are left in full precision. This should provide better accuracy than per-tensor quantization or the naive truncating quantization done by `yalm` (which results in nonsensical output for the DeepSeek family of models).
-- `--quant=q2_k` specifies model weight quantization using the 2-bit llama.cpp [K-quantization scheme](https://github.com/ggml-org/llama.cpp/pull/1684), which uses a two-level hierarchy of blocks and super-blocks to store scales and biases for ranges of weights.
+- `--quant=q2_k` and `--quant=q3_k` specify model weight quantization using the 2-bit and 3-bit llama.cpp [K-quantization schemes](https://github.com/ggml-org/llama.cpp/pull/1684), which use a two-level hierarchy of blocks and super-blocks to store scales/biases for ranges of weights.
 - The models have a tendency to repeat themselves and get into infinite loops at lower temperatures. In my testing, a temperature of ~1.0 avoids this failure mode but also keeps the models reasonably grounded.
 - Some new, optional architectural features (e.g. the `noaux_tc` method of expert selection) of DeepSeek V3 have not yet been implemented, so the model accuracy may be lower than the reference model.
 - You will need ~650GB of memory to run DeepSeek V3 in F8E5M2, or 206GB for 2-bit Q2_K. For best performance, you should ensure there is enough physical RAM available and run as `sudo` with `-L` to force weights to stay in RAM, but otherwise, most operating systems will also automatically supplement this with swap space (storing some memory on disk and some in RAM) at the cost of severely degraded token throughput. More aggressive quantization methods such as [1.58-bit](https://unsloth.ai/blog/deepseekr1-dynamic) are planned.
