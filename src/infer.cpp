@@ -71,7 +71,7 @@ static void dump_debug_map(const std::string& filename) {
 }
 #endif
 
-static void matmul(
+static void _matmul(
   float* xout, float* x, float* w, int n, int d, 
   const int* block_size, float* scale,
   void* unused_aqb
@@ -111,7 +111,7 @@ static void matmul(
 
 // matmul supporting float16 weights via the F16C extension, which allows
 // conversion into float32 values before calculations.
-static void matmul(
+static void _matmul(
   float* xout, float* x, f16_t* w, int n, int d, 
   const int* block_size, float* scale,
   void* unused_aqb
@@ -188,7 +188,7 @@ static void matmul(
 // matmul supporting float8e5m2 weights via AVX2 and F16C extensions, which (1) 
 // allows vectorized conversion from f8e5m2 to float16 and (2) conversion from 
 // float16 to float32 values before calculations.
-static void matmul(
+static void _matmul(
   float* xout, float* x, f8e5m2_t* w, int n, int d, 
   const int* block_size, float* scale,
   void* unused_aqb
@@ -265,7 +265,7 @@ static void matmul(
 #endif
 }
 
-static void matmul(
+static void _matmul(
   float* xout, float* x, block_q2_K* w, int n, int d, 
   const int* unused_block_size, float* unused_scale,
   void* aqb
@@ -298,7 +298,7 @@ static void matmul(
   }
 }
 
-static void matmul(
+static void _matmul(
   float* xout, float* x, block_q3_K* w, int n, int d, 
   const int* unused_block_size, float* unused_scale,
   void* aqb
@@ -331,6 +331,81 @@ static void matmul(
   }
 }
 
+static void matmul(
+  float* xout, float* x, QTensor* w,
+  const int* block_size, float* scale,
+  void* aqb
+) {
+  // W (d,n) @ x (n,) -> xout (d,)
+  int n = w->shape[1];
+  int d = w->shape[0];
+  switch (w->quant) {
+    case Quant::F32: {
+      _matmul(xout, x, static_cast<float*>(w->data), n, d, block_size, scale, aqb);
+      break;
+    }
+    case Quant::F16: {
+      _matmul(xout, x, static_cast<f16_t*>(w->data), n, d, block_size, scale, aqb);
+      break;
+    }
+    case Quant::F8E5M2: {
+      _matmul(xout, x, static_cast<f8e5m2_t*>(w->data), n, d, block_size, scale, aqb);  
+      break;
+    }
+    case Quant::Q2_K: {
+      _matmul(xout, x, static_cast<block_q2_K*>(w->data), n, d, block_size, scale, aqb);
+      break;
+    }
+    case Quant::Q3_K: {
+      _matmul(xout, x, static_cast<block_q3_K*>(w->data), n, d, block_size, scale, aqb);
+      break;
+    }
+    default: assert(false);
+  }
+}
+
+static void matmul_expert(
+  float* xout, float* x, 
+  QTensor* w_experts, int expert_index,
+  const int* block_size, float* scale_experts,
+  void* aqb
+) {
+  // W_experts (n_experts,d,n)
+  // W (d,n) @ x (n,) -> xout (d,)
+  int n = w_experts->shape[2];
+  int d = w_experts->shape[1];
+  size_t expert_size = n * d;
+  int expert_scale_size = scale_experts ? cdiv(d, block_size[0]) * cdiv(n, block_size[1]) : 0;
+  size_t weight_offset = expert_index * expert_size;
+  if (is_k_quant(w_experts->quant)) {
+    // In K-quants, each element of the weight tensor is a block of QK_K elements
+    weight_offset = weight_offset / QK_K;
+  }
+  size_t scale_offset = expert_index * expert_scale_size;
+  switch (w_experts->quant) {
+    case Quant::F32: {
+      _matmul(xout, x, static_cast<float*>(w_experts->data) + weight_offset, n, d, block_size, scale_experts + scale_offset, aqb);
+      break;
+    }
+    case Quant::F16: {
+      _matmul(xout, x, static_cast<f16_t*>(w_experts->data) + weight_offset, n, d, block_size, scale_experts + scale_offset, aqb);
+      break;
+    }
+    case Quant::F8E5M2: {
+      _matmul(xout, x, static_cast<f8e5m2_t*>(w_experts->data) + weight_offset, n, d, block_size, scale_experts + scale_offset, aqb);
+      break;
+    }
+    case Quant::Q2_K: {
+      _matmul(xout, x, static_cast<block_q2_K*>(w_experts->data) + weight_offset, n, d, block_size, scale_experts + scale_offset, aqb);
+      break;
+    }
+    case Quant::Q3_K: {
+      _matmul(xout, x, static_cast<block_q3_K*>(w_experts->data) + weight_offset, n, d, block_size, scale_experts + scale_offset, aqb);
+      break;
+    }
+    default: assert(false);
+  }
+}
 
 // Compute the softmax of an input vector `x` of length `size` and store it in `o`.
 static void softmax(float* o, float* x, int size) {
