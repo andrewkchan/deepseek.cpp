@@ -90,6 +90,8 @@ double bits_per_weight(Quant quant, size_t blockwise_quant_size);
 CodecDType quant_to_codec_dtype(Quant quant);
 bool is_k_quant(Quant quant);
 
+// Tensor data as read from the file, which serializes tensors
+// in PyTorch format.
 struct Tensor {
   std::string name;
   CodecDType dtype;
@@ -99,6 +101,16 @@ struct Tensor {
 
   // Returns 0 if successful, other if failed
   int from_json(const std::string& name, const json& j, void* bytes_ptr, size_t bytes_size);
+};
+
+// Tensor with quantization metadata.
+struct QTensor {
+  Quant quant;
+  std::array<int, 4> shape = {0, 0, 0, 0};
+  void* data = nullptr;
+  size_t size; // size in bytes (number of elements * element size)
+
+  static QTensor from_codec_tensor(const Tensor& tensor, Quant weight_quant, std::array<int, 4> shape, const int debug_line);
 };
 
 struct YALMData {

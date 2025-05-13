@@ -161,6 +161,76 @@ int Tensor::from_json(const std::string& name, const json& val, void* bytes_ptr,
   return 0;
 }
 
+QTensor QTensor::from_codec_tensor(const Tensor& tensor, Quant weight_quant, std::array<int, 4> shape, const int debug_line) {
+  QTensor qtensor;
+  CodecDType expected_dtype = quant_to_codec_dtype(weight_quant);
+  std::array<int, 4> expected_shape = shape;
+  if (is_k_quant(weight_quant)) {
+    size_t numel = 1;
+    for (int i = 0; i < 4; i++) {
+      if (shape[i] > 0) {
+        numel *= shape[i];
+      }
+    }
+    size_t block_size = sizeof(block_q2_K);
+    switch (weight_quant) {
+      case Quant::Q2_K: {
+        block_size = sizeof(block_q2_K);
+        break;
+      }
+      case Quant::Q3_K: {
+        block_size = sizeof(block_q3_K);
+        break;
+      }
+      default: {}
+    }
+    size_t total_blocks = numel / QK_K;
+    size_t total_bytes = total_blocks * block_size;
+    if (tensor->dtype != expected_dtype || tensor->size != total_bytes) {
+      std::cerr << "FATAL: tensor mismatch for " << tensor->name << std::endl;
+      std::cerr 
+        << fmt::format(
+          "expected: dtype={}, size={}", 
+          codec_dtype_to_string(expected_dtype), 
+          total_bytes
+        ) 
+        << std::endl;
+      std::cerr 
+        << fmt::format(
+          "got: dtype={}, size={}", 
+          codec_dtype_to_string(tensor->dtype), 
+          tensor->size
+        ) << std::endl;
+      assert(false);
+    }
+  } else if (tensor->dtype != expected_dtype || tensor->shape != expected_shape) {
+    std::cerr << "FATAL: tensor mismatch for " << tensor->name << std::endl;
+    std::cerr 
+      << fmt::format(
+        "expected: dtype={}, shape=[{},{},{},{}]", 
+        codec_dtype_to_string(expected_dtype), 
+        expected_shape[0], 
+        expected_shape[1], 
+        expected_shape[2], 
+        expected_shape[3]
+      ) 
+      << std::endl;
+    std::cerr 
+      << fmt::format(
+        "got: dtype={}, shape=[{},{},{},{}]", 
+        codec_dtype_to_string(tensor->dtype), 
+        tensor->shape[0], tensor->shape[1], tensor->shape[2], tensor->shape[3]
+      ) 
+      << std::endl;
+    assert(false);
+  }
+  qtensor.quant = weight_quant;
+  qtensor.shape = shape;
+  qtensor.size = tensor.size;
+  qtensor.data = tensor.data;
+  return qtensor;
+}
+
 YALMData::YALMData(const std::string& dirname, bool lock_model_weights) {
   if (from_directory(dirname, lock_model_weights) != 0) {
     std::cerr << "failed to load YALMData from directory" << std::endl;
