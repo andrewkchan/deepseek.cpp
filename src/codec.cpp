@@ -2,6 +2,8 @@
 
 #include "quant.h"
 
+#include "fmt/format.h"
+
 #include <fcntl.h>
 #include <iostream>
 #include <sys/mman.h>
@@ -186,8 +188,8 @@ QTensor QTensor::from_codec_tensor(const Tensor& tensor, Quant weight_quant, std
     }
     size_t total_blocks = numel / QK_K;
     size_t total_bytes = total_blocks * block_size;
-    if (tensor->dtype != expected_dtype || tensor->size != total_bytes) {
-      std::cerr << "FATAL: tensor mismatch for " << tensor->name << std::endl;
+    if (tensor.dtype != expected_dtype || tensor.size != total_bytes) {
+      std::cerr << "FATAL: tensor mismatch for " << tensor.name << std::endl;
       std::cerr 
         << fmt::format(
           "expected: dtype={}, size={}", 
@@ -198,13 +200,13 @@ QTensor QTensor::from_codec_tensor(const Tensor& tensor, Quant weight_quant, std
       std::cerr 
         << fmt::format(
           "got: dtype={}, size={}", 
-          codec_dtype_to_string(tensor->dtype), 
-          tensor->size
+          codec_dtype_to_string(tensor.dtype), 
+          tensor.size
         ) << std::endl;
       assert(false);
     }
-  } else if (tensor->dtype != expected_dtype || tensor->shape != expected_shape) {
-    std::cerr << "FATAL: tensor mismatch for " << tensor->name << std::endl;
+  } else if (tensor.dtype != expected_dtype || tensor.shape != expected_shape) {
+    std::cerr << "FATAL: tensor mismatch for " << tensor.name << std::endl;
     std::cerr 
       << fmt::format(
         "expected: dtype={}, shape=[{},{},{},{}]", 
@@ -218,8 +220,8 @@ QTensor QTensor::from_codec_tensor(const Tensor& tensor, Quant weight_quant, std
     std::cerr 
       << fmt::format(
         "got: dtype={}, shape=[{},{},{},{}]", 
-        codec_dtype_to_string(tensor->dtype), 
-        tensor->shape[0], tensor->shape[1], tensor->shape[2], tensor->shape[3]
+        codec_dtype_to_string(tensor.dtype), 
+        tensor.shape[0], tensor.shape[1], tensor.shape[2], tensor.shape[3]
       ) 
       << std::endl;
     assert(false);
