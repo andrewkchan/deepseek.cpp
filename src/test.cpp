@@ -108,7 +108,7 @@ void test_attn() {
     int kv_head_offset = h * TEST_HEAD_DIM;
     f16_t* kh = kb.data() + kv_head_offset;
     f16_t* vh = vb.data() + kv_head_offset;
-    attn(s.xb(h), s.att(h), s.q(h), kh, vh, TEST_HEAD_DIM, TEST_HEAD_DIM, TEST_N_KV_HEADS, TEST_SEQ_LEN);
+    attn(s.xb(h), s.att(h), s.q(h), kh, vh, TEST_HEAD_DIM, TEST_HEAD_DIM, TEST_N_HEADS, TEST_SEQ_LEN);
   }
   // attention scores
   // h=0
