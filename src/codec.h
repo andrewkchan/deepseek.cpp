@@ -96,7 +96,7 @@ struct Tensor {
   std::string name;
   CodecDType dtype;
   std::array<int, 4> shape = {0, 0, 0, 0};
-  void* data = nullptr;
+  void* data = nullptr; // not managed by Tensor
   size_t size; // size in bytes (number of elements * element size)
 
   // Returns 0 if successful, other if failed
@@ -105,11 +105,14 @@ struct Tensor {
 
 // Tensor with quantization metadata.
 struct QTensor {
-  Quant quant;
+  Quant quant = Quant::F32;
   std::array<int, 4> shape = {0, 0, 0, 0};
-  void* data = nullptr;
-  size_t size; // size in bytes (number of elements * element size)
+  void* data = nullptr; // not managed by QTensor
+  size_t size = 0; // size in bytes (number of elements * element size)
 
+  QTensor() = default;
+  QTensor(Quant quant, std::array<int, 4> shape, void* data, size_t size) : quant(quant), shape(shape), data(data), size(size) {}
+  QTensor(const QTensor& other) = default;
   static QTensor from_codec_tensor(const Tensor& tensor, Quant weight_quant, std::array<int, 4> shape, const int debug_line);
 };
 

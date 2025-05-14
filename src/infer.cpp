@@ -332,75 +332,89 @@ static void _matmul(
 }
 
 static void matmul(
-  float* xout, float* x, QTensor* w,
-  const int* block_size, float* scale,
+  float* xout, float* x, const QTensor& w,
+  const int* block_size, std::optional<QTensor> scale,
   void* aqb
 ) {
   // W (d,n) @ x (n,) -> xout (d,)
-  int n = w->shape[1];
-  int d = w->shape[0];
-  switch (w->quant) {
+  int n = w.shape[1];
+  int d = w.shape[0];
+  float* scale_data = nullptr;
+  if (scale) {
+    assert(scale->quant == Quant::F32);
+    scale_data = static_cast<float*>(scale->data);
+  }
+  switch (w.quant) {
     case Quant::F32: {
-      _matmul(xout, x, static_cast<float*>(w->data), n, d, block_size, scale, aqb);
+      _matmul(xout, x, static_cast<float*>(w.data), n, d, block_size, scale_data, aqb);
       break;
     }
     case Quant::F16: {
-      _matmul(xout, x, static_cast<f16_t*>(w->data), n, d, block_size, scale, aqb);
+      _matmul(xout, x, static_cast<f16_t*>(w.data), n, d, block_size, scale_data, aqb);
       break;
     }
     case Quant::F8E5M2: {
-      _matmul(xout, x, static_cast<f8e5m2_t*>(w->data), n, d, block_size, scale, aqb);  
+      _matmul(xout, x, static_cast<f8e5m2_t*>(w.data), n, d, block_size, scale_data, aqb);  
       break;
     }
     case Quant::Q2_K: {
-      _matmul(xout, x, static_cast<block_q2_K*>(w->data), n, d, block_size, scale, aqb);
+      _matmul(xout, x, static_cast<block_q2_K*>(w.data), n, d, block_size, scale_data, aqb);
       break;
     }
     case Quant::Q3_K: {
-      _matmul(xout, x, static_cast<block_q3_K*>(w->data), n, d, block_size, scale, aqb);
+      _matmul(xout, x, static_cast<block_q3_K*>(w.data), n, d, block_size, scale_data, aqb);
       break;
     }
     default: assert(false);
   }
 }
 
+void matmul_unscaled(float* xout, float* x, const QTensor& w) {
+  matmul(xout, x, w, nullptr, std::nullopt, nullptr);
+}
+
 static void matmul_expert(
   float* xout, float* x, 
-  QTensor* w_experts, int expert_index,
-  const int* block_size, float* scale_experts,
+  const QTensor& w_experts, int expert_index,
+  const int* block_size, std::optional<QTensor> scale_experts,
   void* aqb
 ) {
   // W_experts (n_experts,d,n)
   // W (d,n) @ x (n,) -> xout (d,)
-  int n = w_experts->shape[2];
-  int d = w_experts->shape[1];
+  int n = w_experts.shape[2];
+  int d = w_experts.shape[1];
   size_t expert_size = n * d;
-  int expert_scale_size = scale_experts ? cdiv(d, block_size[0]) * cdiv(n, block_size[1]) : 0;
+  float* scale_data = nullptr;
+  if (scale_experts) {
+    assert(scale_experts->quant == Quant::F32);
+    int expert_scale_size = cdiv(d, block_size[0]) * cdiv(n, block_size[1]);
+    size_t scale_offset = expert_index * expert_scale_size;
+    scale_data = static_cast<float*>(scale_experts->data) + scale_offset;
+  }
   size_t weight_offset = expert_index * expert_size;
-  if (is_k_quant(w_experts->quant)) {
+  if (is_k_quant(w_experts.quant)) {
     // In K-quants, each element of the weight tensor is a block of QK_K elements
     weight_offset = weight_offset / QK_K;
   }
-  size_t scale_offset = expert_index * expert_scale_size;
-  switch (w_experts->quant) {
+  switch (w_experts.quant) {
     case Quant::F32: {
-      _matmul(xout, x, static_cast<float*>(w_experts->data) + weight_offset, n, d, block_size, scale_experts + scale_offset, aqb);
+      _matmul(xout, x, static_cast<float*>(w_experts.data) + weight_offset, n, d, block_size, scale_data, aqb);
       break;
     }
     case Quant::F16: {
-      _matmul(xout, x, static_cast<f16_t*>(w_experts->data) + weight_offset, n, d, block_size, scale_experts + scale_offset, aqb);
+      _matmul(xout, x, static_cast<f16_t*>(w_experts.data) + weight_offset, n, d, block_size, scale_data, aqb);
       break;
     }
     case Quant::F8E5M2: {
-      _matmul(xout, x, static_cast<f8e5m2_t*>(w_experts->data) + weight_offset, n, d, block_size, scale_experts + scale_offset, aqb);
+      _matmul(xout, x, static_cast<f8e5m2_t*>(w_experts.data) + weight_offset, n, d, block_size, scale_data, aqb);
       break;
     }
     case Quant::Q2_K: {
-      _matmul(xout, x, static_cast<block_q2_K*>(w_experts->data) + weight_offset, n, d, block_size, scale_experts + scale_offset, aqb);
+      _matmul(xout, x, static_cast<block_q2_K*>(w_experts.data) + weight_offset, n, d, block_size, scale_data, aqb);
       break;
     }
     case Quant::Q3_K: {
-      _matmul(xout, x, static_cast<block_q3_K*>(w_experts->data) + weight_offset, n, d, block_size, scale_experts + scale_offset, aqb);
+      _matmul(xout, x, static_cast<block_q3_K*>(w_experts.data) + weight_offset, n, d, block_size, scale_data, aqb);
       break;
     }
     default: assert(false);
@@ -779,31 +793,21 @@ void Block::_block_cpu(
     }
   }
 
-  if (c.n_routed_experts > 0 && moegate() != nullptr) {
+  if (c.n_routed_experts > 0 && moegate() != std::nullopt) {
     PROFILE_BLOCK(ffn_moe);
     // Block is a sparse MoE FFN layer
-    PROFILE(matmul_unscaled(s.moe_weights(), s.xb(), moegate(), c.dim, c.n_routed_experts));
+    PROFILE(matmul_unscaled(s.moe_weights(), s.xb(), *moegate()));
     moe_gate(
-      s.active_experts_weights(), _moegate_bias, s.active_experts(), s.moe_weights(),
+      s.active_experts_weights(), static_cast<float*>(_moegate_bias->data), s.active_experts(), s.moe_weights(),
       c.n_routed_experts, c.n_active_routed, c.norm_topk_prob, c.routed_scaling_factor,
       c.scoring_func, c.topk_method, c.n_group, c.topk_group
     );
     for (int k = 0; k < c.n_active_routed; ++k) {
       int expert_index = s.active_experts()[k];
-      size_t expert_size = c.dim * c.moe_intermediate_size;
-      int expert_scale13_size = _s1 ? cdiv(c.moe_intermediate_size, c.block_size[0]) * cdiv(c.dim, c.block_size[1]) : 0;
-      int expert_scale2_size = _s2 ? cdiv(c.dim, c.block_size[0]) * cdiv(c.moe_intermediate_size, c.block_size[1]) : 0;
-      size_t weight_offset = expert_index * expert_size;
-      if (is_k_quant(c.weight_quant)) {
-        // In K-quants, each element of the weight tensor is a block of QK_K elements
-        weight_offset = weight_offset / QK_K;
-      }
-      size_t scale13_offset = expert_index * expert_scale13_size;
-      size_t scale2_offset = expert_index * expert_scale2_size;
       // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
       // Note this is a feedforward with a GLU, not a simple MLP.
-      PROFILE(matmul(s.hb(), s.xb(), w1<T>() + weight_offset, c.dim, c.moe_intermediate_size, c.block_size.data(), _s1 + scale13_offset, s.aqb()));
-      PROFILE(matmul(s.hb2(), s.xb(), w3<T>() + weight_offset, c.dim, c.moe_intermediate_size, c.block_size.data(), _s3 + scale13_offset, s.aqb()));
+      PROFILE(matmul_expert(s.hb(), s.xb(), *w1(), expert_index, c.block_size.data(), _s1, s.aqb()));
+      PROFILE(matmul_expert(s.hb2(), s.xb(), *w3(), expert_index, c.block_size.data(), _s3, s.aqb()));
       switch (c.act) {
         case ActivationType::GELU: {
           for (int i = 0; i < c.moe_intermediate_size; ++i) {
@@ -818,7 +822,7 @@ void Block::_block_cpu(
           break;
         }
       }
-      PROFILE(matmul(s.xb2(), s.hb(), w2<T>() + weight_offset, c.moe_intermediate_size, c.dim, c.block_size.data(), _s2 + scale2_offset, s.aqb()));
+      PROFILE(matmul_expert(s.xb2(), s.hb(), *w2(), expert_index, c.block_size.data(), _s2, s.aqb()));
       float expert_weight = s.active_experts_weights()[k];
       for (int i = 0; i < c.dim; ++i) {
         s.x()[i] += s.xb2()[i] * expert_weight;
@@ -827,8 +831,8 @@ void Block::_block_cpu(
     if (c.n_shared_experts > 0) {
       // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
       // Note this is a feedforward with a GLU, not a simple MLP.
-      PROFILE(matmul(s.hb(), s.xb(), shared_w1<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size, c.block_size.data(), _shared_s1, s.aqb()));
-      PROFILE(matmul(s.hb2(), s.xb(), shared_w3<T>(), c.dim, c.n_shared_experts * c.moe_intermediate_size, c.block_size.data(), _shared_s3, s.aqb()));
+      PROFILE(matmul(s.hb(), s.xb(), *shared_w1(), c.block_size.data(), _shared_s1, s.aqb()));
+      PROFILE(matmul(s.hb2(), s.xb(), *shared_w3(), c.block_size.data(), _shared_s3, s.aqb()));
       switch (c.act) {
         case ActivationType::GELU: {
           for (int i = 0; i < c.n_shared_experts * c.moe_intermediate_size; ++i) {
@@ -844,7 +848,7 @@ void Block::_block_cpu(
         }
       }
 
-      PROFILE(matmul(s.xb2(), s.hb(), shared_w2<T>(), c.n_shared_experts * c.moe_intermediate_size, c.dim, c.block_size.data(), _shared_s2, s.aqb()));
+      PROFILE(matmul(s.xb2(), s.hb(), *shared_w2(), c.block_size.data(), _shared_s2, s.aqb()));
       // residual connection back into x
       for (int i = 0; i < c.dim; ++i) {
         s.x()[i] += s.xb2()[i];
@@ -855,8 +859,8 @@ void Block::_block_cpu(
     // Block is a dense FFN layer
     // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
     // Note this is a feedforward with a GLU, not a simple MLP.
-    PROFILE(matmul(s.hb(), s.xb(), w1<T>(), c.dim, c.hidden_dim, c.block_size.data(), _s1, s.aqb()));
-    PROFILE(matmul(s.hb2(), s.xb(), w3<T>(), c.dim, c.hidden_dim, c.block_size.data(), _s3, s.aqb()));
+    PROFILE(matmul(s.hb(), s.xb(), *w1(), c.block_size.data(), _s1, s.aqb()));
+    PROFILE(matmul(s.hb2(), s.xb(), *w3(), c.block_size.data(), _s3, s.aqb()));
     switch (c.act) {
       case ActivationType::GELU: {
         for (int i = 0; i < c.hidden_dim; ++i) {
@@ -871,7 +875,7 @@ void Block::_block_cpu(
         break;
       }
     }
-    PROFILE(matmul(s.xb2(), s.hb(), w2<T>(), c.hidden_dim, c.dim, c.block_size.data(), _s2, s.aqb()));
+    PROFILE(matmul(s.xb2(), s.hb(), *w2(), c.block_size.data(), _s2, s.aqb()));
     // residual connection back into x
     for (int i = 0; i < c.dim; ++i) {
       s.x()[i] += s.xb2()[i];
@@ -885,22 +889,21 @@ void BlockMHA::_attention_impl(
 ) const {
   PROFILE_BLOCK(attn_mha);
   const Config& c = *_config;
-  int q_dim = c.n_heads * c.head_dim;
 
   // qkv matmuls for this position
   if (c.q_lora_rank > 0) {
-    PROFILE(matmul(s.q_a(), s.xb(), this->wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a, s.aqb()));
+    PROFILE(matmul(s.q_a(), s.xb(), *wq_a(), c.block_size.data(), _sq_a, s.aqb()));
     switch (c.norm_type) {
       case LayerNormType::RMSNorm: {
         rmsnorm(s.q_a(), s.q_a(), this->rms_q_a_weight(), c.q_lora_rank, c.norm_eps);
         break;
       }
     }
-    PROFILE(matmul(s.q(), s.q_a(), this->wq_b<T>(), c.q_lora_rank, q_dim, c.block_size.data(), _sq_b, s.aqb()));
+    PROFILE(matmul(s.q(), s.q_a(), *wq_b(), c.block_size.data(), _sq_b, s.aqb()));
   } else {
-    PROFILE(matmul(s.q(), s.xb(), this->wq<T>(), c.dim, q_dim, c.block_size.data(), _sq, s.aqb()));
+    PROFILE(matmul(s.q(), s.xb(), *wq(), c.block_size.data(), _sq, s.aqb()));
   }
-  PROFILE(matmul(s.kv_a(), s.xb(), this->wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a, s.aqb()));
+  PROFILE(matmul(s.kv_a(), s.xb(), *wkv_a(), c.block_size.data(), _skv_a, s.aqb()));
 
   // Apply RoPE positional encoding
   int q_pe_offset = c.head_dim - c.qk_rope_head_dim;
@@ -923,8 +926,7 @@ void BlockMHA::_attention_impl(
   rmsnorm(s.kv_a(), s.kv_a(), this->rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
   // un-compress the latent kv via multiplication with wkv_b
   int qk_nope_head_dim = c.head_dim - c.qk_rope_head_dim;
-  int uncompressed_kv_dim = c.n_heads * (qk_nope_head_dim + c.v_head_dim);
-  PROFILE(matmul(s.kv_b(), s.kv_a(), this->wkv_b<T>(), c.kv_lora_rank, uncompressed_kv_dim, c.block_size.data(), _skv_b, s.aqb()));
+  PROFILE(matmul(s.kv_b(), s.kv_a(), *wkv_b(), c.block_size.data(), _skv_b, s.aqb()));
   // concatenate kv_b and k_rope in each head to build key heads
   for (int h = 0; h < c.n_heads; h++) {
     for (int i = 0; i < qk_nope_head_dim; i++) {
@@ -995,7 +997,7 @@ void BlockMHA::_attention_impl(
   }
 
   // final matmul to get output of the attention, place result in s.hb() for residual connection
-  PROFILE(matmul(s.hb(), s.xb2(), this->wo<T>(), c.n_heads * c.v_head_dim, c.dim, c.block_size.data(), _so, s.aqb()));
+  PROFILE(matmul(s.hb(), s.xb2(), *wo(), c.block_size.data(), _so, s.aqb()));
 }
 
 template<typename T>
@@ -1007,17 +1009,17 @@ void BlockMLA::_attention_impl(
   assert(c.q_lora_rank > 0); // MLA requires q_lora_rank > 0
 
   // qkv down projections
-  PROFILE(matmul(s.q_a(), s.xb(), this->wq_a<T>(), c.dim, c.q_lora_rank, c.block_size.data(), _sq_a, s.aqb()));
+  PROFILE(matmul(s.q_a(), s.xb(), *wq_a(), c.block_size.data(), _sq_a, s.aqb()));
   switch (c.norm_type) {
     case LayerNormType::RMSNorm: {
       rmsnorm(s.q_a(), s.q_a(), this->rms_q_a_weight(), c.q_lora_rank, c.norm_eps);
       break;
     }
   }
-  PROFILE(matmul(s.kv_a(), s.xb(), this->wkv_a<T>(), c.dim, c.kv_lora_rank + c.qk_rope_head_dim, c.block_size.data(), _skv_a, s.aqb()));
+  PROFILE(matmul(s.kv_a(), s.xb(), *wkv_a(), c.block_size.data(), _skv_a, s.aqb()));
   // query transformations
-  PROFILE(matmul(s.q_rope(), s.q_a(), this->wq_rope_b<T>(), c.q_lora_rank, c.n_heads * c.qk_rope_head_dim, c.block_size.data(), _sq_rope_b, s.aqb()));
-  PROFILE(matmul(s.q_c(), s.q_a(), this->wc<T>(), c.q_lora_rank, c.n_heads * c.kv_lora_rank, c.block_size.data(), _sc, s.aqb()));
+  PROFILE(matmul(s.q_rope(), s.q_a(), *wq_rope_b(), c.block_size.data(), _sq_rope_b, s.aqb()));
+  PROFILE(matmul(s.q_c(), s.q_a(), *wc(), c.block_size.data(), _sc, s.aqb()));
 
   // Apply RoPE positional encoding
   bool is_v3 = c.has_moegate_bias;
@@ -1083,18 +1085,11 @@ void BlockMLA::_attention_impl(
   // We reuse kv_b buffer here for the uncompressed value outputs.
   for (int h = 0; h < c.n_heads; h++) {
     float* v_b_head = s.kv_b() + h * c.v_head_dim;
-    size_t v_b_head_size = c.v_head_dim * c.kv_lora_rank;
-    size_t v_b_head_offset = v_b_head_size * h;
-    if (is_k_quant(c.weight_quant)) {
-      // In k-quants, each element of the weight tensor is a block of QK_K elements
-      v_b_head_offset = v_b_head_offset / QK_K;
-    }
-    T* wv_b_head = wv_b<T>() + v_b_head_offset;
-    PROFILE(matmul(v_b_head, s.xb2(h, c.kv_lora_rank), wv_b_head, c.kv_lora_rank, c.v_head_dim, c.block_size.data(), _sv_b, s.aqb()));
+    PROFILE(matmul_expert(v_b_head, s.xb2(h, c.kv_lora_rank), *wv_b(), h, c.block_size.data(), _sv_b, s.aqb()));
   }
 
   // final matmul to get output of the attention, place result in s.hb() for residual connection
-  PROFILE(matmul(s.hb(), s.kv_b(), this->wo<T>(), c.n_heads * c.v_head_dim, c.dim, c.block_size.data(), _so, s.aqb()));
+  PROFILE(matmul(s.hb(), s.kv_b(), *wo(), c.block_size.data(), _so, s.aqb()));
 }
 
 void mha_cpu(
@@ -1120,16 +1115,6 @@ void mha_cpu(
   }
 }
 
-void matmul_unscaled(float* xout, float* x, float* w, int n, int d) {
-  matmul(xout, x, w, n, d, nullptr, nullptr, nullptr);
-}
-void matmul_unscaled(float* xout, float* x, f16_t* w, int n, int d) {
-  matmul(xout, x, w, n, d, nullptr, nullptr, nullptr);
-}
-void matmul_unscaled(float* xout, float* x, f8e5m2_t* w, int n, int d) {
-  matmul(xout, x, w, n, d, nullptr, nullptr, nullptr);
-}
-
 void ffn_cpu(
   float* xout, float* x, 
   float* w1, float* w2, float* w3, 
@@ -1140,8 +1125,8 @@ void ffn_cpu(
   float* hb2 = new float[hidden_dim];
   // mix self.w2(F.silu(self.w1(x)) * self.w3(x))
   // Note this is a feedforward with a GLU, not a simple MLP.
-  matmul_unscaled(hb, x, w1, dim, hidden_dim);
-  matmul_unscaled(hb2, x, w3, dim, hidden_dim);
+  matmul_unscaled(hb, x, QTensor(Quant::F32, {dim, hidden_dim}, w1, dim*hidden_dim*sizeof(float)));
+  matmul_unscaled(hb2, x, QTensor(Quant::F32, {dim, hidden_dim}, w3, dim*hidden_dim*sizeof(float)));
   switch (act) {
     case ActivationType::GELU: {
       for (int i = 0; i < hidden_dim; ++i) {
@@ -1157,7 +1142,7 @@ void ffn_cpu(
     }
   }
 
-  matmul_unscaled(xout, hb, w2, hidden_dim, dim);
+  matmul_unscaled(xout, hb, QTensor(Quant::F32, {hidden_dim, dim}, w2, hidden_dim*dim*sizeof(float)));
   
   delete[] hb;
   delete[] hb2;
@@ -1185,39 +1170,40 @@ void Model::_copy_embedding(InferenceState& s, int token) {
   const Config& c = *config;
   switch (c.weight_quant) {
     case Quant::F32: {
-      float* emb = static_cast<float*>(token_embedding_table);
+      float* emb = static_cast<float*>(token_embedding_table->data);
       for (int i = 0; i < c.dim; ++i) {
         s.x()[i] = emb[token * c.dim + i];
       }
       break;
     }
     case Quant::F16: {
-      f16_t* emb = static_cast<f16_t*>(token_embedding_table);
+      f16_t* emb = static_cast<f16_t*>(token_embedding_table->data);
       for (int i = 0; i < c.dim; i+=1) {
         s.x()[i] = half_to_float(emb[token * c.dim + i]);
       }
       break;
     }
     case Quant::F8E5M2: {
-      f8e5m2_t* emb = static_cast<f8e5m2_t*>(token_embedding_table);
+      f8e5m2_t* emb = static_cast<f8e5m2_t*>(token_embedding_table->data);
+      float* emb_scale = static_cast<float*>(token_embedding_scale->data);
       int* block_size = config->block_size.data();
       int scale_num_cols = (c.dim + block_size[1] - 1) / block_size[1];
       for (int i = 0; i < c.dim; i+=1) {
         int scale_i = token / block_size[0];
         int scale_j = i / block_size[1];
-        float scale = token_embedding_scale[scale_i * scale_num_cols + scale_j];
+        float scale = emb_scale[scale_i * scale_num_cols + scale_j];
         s.x()[i] = float8e5m2_to_float(emb[token * c.dim + i]) * scale;
       }
       break;
     }
     case Quant::Q2_K: {
-      block_q2_K* emb = static_cast<block_q2_K*>(token_embedding_table);
+      block_q2_K* emb = static_cast<block_q2_K*>(token_embedding_table->data);
       int blocks_per_row = c.dim / QK_K;
       dequantize_row_q2_K(emb + token * blocks_per_row, s.x(), c.dim);
       break;
     }
     case Quant::Q3_K: {
-      block_q3_K* emb = static_cast<block_q3_K*>(token_embedding_table);
+      block_q3_K* emb = static_cast<block_q3_K*>(token_embedding_table->data);
       int blocks_per_row = c.dim / QK_K;
       dequantize_row_q3_K(emb + token * blocks_per_row, s.x(), c.dim);
       break;
@@ -1254,7 +1240,7 @@ void Model::_forward_cpu(InferenceState& s, int token, int pos, InferenceMode mo
   // final layer norm
   switch (c.norm_type) {
     case LayerNormType::RMSNorm: {
-      rmsnorm(s.x(), s.x(), rms_final_weight, c.dim, c.norm_eps);
+      rmsnorm(s.x(), s.x(), static_cast<float*>(rms_final_weight->data), c.dim, c.norm_eps);
       break;
     }
   }
@@ -1263,24 +1249,15 @@ void Model::_forward_cpu(InferenceState& s, int token, int pos, InferenceMode mo
   {
     PROFILE_BLOCK(lm_head);
     switch (c.weight_quant) {
-      case Quant::F32: {
-        matmul_unscaled(s.logits(), s.x(), static_cast<float*>(wcls), c.dim, c.vocab_size);
-        break;
-      }
+      case Quant::F32:
       case Quant::F16: {
-        matmul_unscaled(s.logits(), s.x(), static_cast<f16_t*>(wcls), c.dim, c.vocab_size);
+        matmul_unscaled(s.logits(), s.x(), *wcls);
         break;
       }
-      case Quant::F8E5M2: {
-        matmul(s.logits(), s.x(), static_cast<f8e5m2_t*>(wcls), c.dim, c.vocab_size, c.block_size.data(), scls, s.aqb());
-        break;
-      }
-      case Quant::Q2_K: {
-        matmul(s.logits(), s.x(), static_cast<block_q2_K*>(wcls), c.dim, c.vocab_size, c.block_size.data(), scls, s.aqb());
-        break;
-      }
+      case Quant::F8E5M2:
+      case Quant::Q2_K:
       case Quant::Q3_K: {
-        matmul(s.logits(), s.x(), static_cast<block_q3_K*>(wcls), c.dim, c.vocab_size, c.block_size.data(), scls, s.aqb());
+        matmul(s.logits(), s.x(), *wcls, c.block_size.data(), scls, s.aqb());
         break;
       }
       default: {

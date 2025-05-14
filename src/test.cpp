@@ -147,21 +147,21 @@ void test_matmul() {
   std::vector<f8e5m2_t> w_f8e5m2 = float_array_to_float8e5m2(w_f32);
   {
     std::vector<float> xout(2);
-    matmul_unscaled(xout.data(), x.data(), w_f32.data(), 16, 2);
+    matmul_unscaled(xout.data(), x.data(), {Quant::F32, {16, 2}, w_f32.data(), 16*2*sizeof(float)});
     assertArrayEquals(xout, {
       -3.7454, -3.2738
     }, "matmul_f32", 1e-4);
   }
   {
     std::vector<float> xout(2);
-    matmul_unscaled(xout.data(), x.data(), w_f16.data(), 16, 2);
+    matmul_unscaled(xout.data(), x.data(), {Quant::F16, {16, 2}, w_f16.data(), 16*2*sizeof(f16_t)});
     assertArrayEquals(xout, {
       -3.7454, -3.2738
     }, "matmul_f16", 1e-3);
   }
   {
     std::vector<float> xout(2);
-    matmul_unscaled(xout.data(), x.data(), w_f8e5m2.data(), 16, 2);
+    matmul_unscaled(xout.data(), x.data(), {Quant::F8E5M2, {16, 2}, w_f8e5m2.data(), 16*2*sizeof(f8e5m2_t)});
     assertArrayEquals(xout, {
       -3.7454, -3.2738
     }, "matmul_f8e5m2", 3.78e-1);
@@ -170,7 +170,7 @@ void test_matmul() {
     for (size_t i = 0; i < w_f8e5m2.size(); i++) {
       w8_roundtrip.push_back(float8e5m2_to_float(w_f8e5m2[i]));
     }
-    matmul_unscaled(xout_roundtrip.data(), x.data(), w8_roundtrip.data(), 16, 2);
+    matmul_unscaled(xout_roundtrip.data(), x.data(), {Quant::F8E5M2, {16, 2}, w8_roundtrip.data(), 16*2*sizeof(f8e5m2_t)});
     assertArrayEquals(xout_roundtrip, xout, "matmul_f8e5m2_roundtrip");
   }
   std::vector<float> x8_roundtrip;

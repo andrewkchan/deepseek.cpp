@@ -5,6 +5,7 @@
 #include <memory>
 #include <vector>
 #include <map>
+#include <optional>
 
 #include "quant.h"
 
@@ -193,21 +194,15 @@ struct Block {
   );
   virtual ~Block();
 
-  float* rms_att_weight() const { return _rms_att_weight; }
-  float* rms_ffn_weight() const { return _rms_ffn_weight; }
-  template <typename T>
-  T* w1() const { return static_cast<T*>(_w1); }
-  template <typename T>
-  T* w2() const { return static_cast<T*>(_w2); }
-  template <typename T>
-  T* w3() const { return static_cast<T*>(_w3); }
-  float* moegate() const { return _moegate; }
-  template <typename T>
-  T* shared_w1() const { return static_cast<T*>(_shared_w1); }
-  template <typename T>
-  T* shared_w2() const { return static_cast<T*>(_shared_w2); }
-  template <typename T>
-  T* shared_w3() const { return static_cast<T*>(_shared_w3); }
+  float* rms_att_weight() const { return _rms_att_weight ? static_cast<float*>(_rms_att_weight->data) : nullptr; }
+  float* rms_ffn_weight() const { return _rms_ffn_weight ? static_cast<float*>(_rms_ffn_weight->data) : nullptr; }
+  std::optional<QTensor> w1() const { return _w1; }
+  std::optional<QTensor> w2() const { return _w2; }
+  std::optional<QTensor> w3() const { return _w3; }
+  std::optional<QTensor> moegate() const { return _moegate; }
+  std::optional<QTensor> shared_w1() const { return _shared_w1; }
+  std::optional<QTensor> shared_w2() const { return _shared_w2; }
+  std::optional<QTensor> shared_w3() const { return _shared_w3; }
 
   // Compute forward pass for this block and update the inference state accordingly.
   // PRECONDITIONS:
@@ -245,25 +240,25 @@ protected:
   Device _device = Device::CPU;
 
   // weights for norms
-  float* _rms_att_weight = nullptr; // (dim) rmsnorm weights for attention input
-  float* _rms_ffn_weight = nullptr; // (dim) rmsnorm weights for ffn input
+  std::optional<QTensor> _rms_att_weight = std::nullopt; // (dim) rmsnorm weights for attention input
+  std::optional<QTensor> _rms_ffn_weight = std::nullopt; // (dim) rmsnorm weights for ffn input
 
   // weights for ffn
-  void* _w1 = nullptr; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
-  float* _s1 = nullptr;
-  void* _w2 = nullptr; // (n_routed_experts?, dim, moe_intermediate_size) or (dim, hidden_dim)
-  float* _s2 = nullptr;
-  void* _w3 = nullptr; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
-  float* _s3 = nullptr;
-  void* _shared_w1 = nullptr; // (n_shared_experts?, moe_intermediate_size, dim)
-  float* _shared_s1 = nullptr;
-  void* _shared_w2 = nullptr; // (n_shared_experts?, dim, moe_intermediate_size)
-  float* _shared_s2 = nullptr;
-  void* _shared_w3 = nullptr; // (n_shared_experts?, moe_intermediate_size, dim)
-  float* _shared_s3 = nullptr;
+  std::optional<QTensor> _w1 = std::nullopt; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
+  std::optional<QTensor> _s1 = std::nullopt;
+  std::optional<QTensor> _w2 = std::nullopt; // (n_routed_experts?, dim, moe_intermediate_size) or (dim, hidden_dim)
+  std::optional<QTensor> _s2 = std::nullopt;
+  std::optional<QTensor> _w3 = std::nullopt; // (n_routed_experts?, moe_intermediate_size, dim) or (hidden_dim, dim)
+  std::optional<QTensor> _s3 = std::nullopt;
+  std::optional<QTensor> _shared_w1 = std::nullopt; // (n_shared_experts?, moe_intermediate_size, dim)
+  std::optional<QTensor> _shared_s1 = std::nullopt;
+  std::optional<QTensor> _shared_w2 = std::nullopt; // (n_shared_experts?, dim, moe_intermediate_size)
+  std::optional<QTensor> _shared_s2 = std::nullopt;
+  std::optional<QTensor> _shared_w3 = std::nullopt; // (n_shared_experts?, moe_intermediate_size, dim)
+  std::optional<QTensor> _shared_s3 = std::nullopt;
   // weights for mixture of experts router if present
-  float* _moegate = nullptr; // (n_routed_experts?, dim)
-  float* _moegate_bias = nullptr;
+  std::optional<QTensor> _moegate = std::nullopt; // (n_routed_experts?, dim)
+  std::optional<QTensor> _moegate_bias = std::nullopt;
 };
 
 /* Transformer Block - Multi-Head Attention */
@@ -304,20 +299,14 @@ struct BlockMHA : public Block {
   );
   ~BlockMHA() override;
 
-  float* rms_q_a_weight() const { return _rms_q_a_weight; }
-  float* rms_kv_a_weight() const { return _rms_kv_a_weight; }
-  template <typename T>
-  T* wq() const { return static_cast<T*>(_wq); }
-  template <typename T>
-  T* wq_a() const { return static_cast<T*>(_wq_a); }
-  template <typename T>
-  T* wq_b() const { return static_cast<T*>(_wq_b); }
-  template <typename T>
-  T* wkv_a() const { return static_cast<T*>(_wkv_a); }
-  template <typename T>
-  T* wkv_b() const { return static_cast<T*>(_wkv_b); }
-  template <typename T>
-  T* wo() const { return static_cast<T*>(_wo); }
+  float* rms_q_a_weight() const { return _rms_q_a_weight ? static_cast<float*>(_rms_q_a_weight->data) : nullptr; }
+  float* rms_kv_a_weight() const { return _rms_kv_a_weight ? static_cast<float*>(_rms_kv_a_weight->data) : nullptr; }
+  std::optional<QTensor> wq() const { return _wq; }
+  std::optional<QTensor> wq_a() const { return _wq_a; }
+  std::optional<QTensor> wq_b() const { return _wq_b; }
+  std::optional<QTensor> wkv_a() const { return _wkv_a; }
+  std::optional<QTensor> wkv_b() const { return _wkv_b; }
+  std::optional<QTensor> wo() const { return _wo; }
   f16_t* key_cache() const { return _key_cache; }
   f16_t* key_cache(int pos) const { return _key_cache + pos * _config->head_dim * _config->n_heads; }
   f16_t* value_cache() const { return _value_cache; }
@@ -338,22 +327,22 @@ private:
     int kv_len          // number of tokens in the kv cache that we will attend over
   ) const;
 
-  float* _rms_q_a_weight = nullptr; // (q_lora_rank) rmsnorm weights
-  float* _rms_kv_a_weight = nullptr; // (kv_lora_rank + qk_rope_head_dim)
+  std::optional<QTensor> _rms_q_a_weight = std::nullopt; // (q_lora_rank) rmsnorm weights
+  std::optional<QTensor> _rms_kv_a_weight = std::nullopt; // (kv_lora_rank + qk_rope_head_dim)
 
   // weights for self-attention matmuls
-  void* _wq = nullptr; // (n_heads * head_dim, dim)
-  float* _sq = nullptr;
-  void* _wq_a = nullptr; // (q_lora_rank, dim)
-  float* _sq_a = nullptr;
-  void* _wkv_a = nullptr; // (kv_lora_rank + qk_rope_head_dim, dim)
-  float* _skv_a = nullptr;
-  void* _wo = nullptr; // (dim, n_heads * v_head_dim)
-  float* _so = nullptr;
-  void* _wq_b = nullptr; // (n_heads * head_dim, q_lora_rank)
-  float* _sq_b = nullptr;
-  void* _wkv_b = nullptr; // (n_heads * (head_dim-qk_rope_head_dim+v_head_dim), kv_lora_rank)
-  float* _skv_b = nullptr;
+  std::optional<QTensor> _wq = std::nullopt; // (n_heads * head_dim, dim)
+  std::optional<QTensor> _sq = std::nullopt;
+  std::optional<QTensor> _wq_a = std::nullopt; // (q_lora_rank, dim)
+  std::optional<QTensor> _sq_a = std::nullopt;
+  std::optional<QTensor> _wkv_a = std::nullopt; // (kv_lora_rank + qk_rope_head_dim, dim)
+  std::optional<QTensor> _skv_a = std::nullopt;
+  std::optional<QTensor> _wo = std::nullopt; // (dim, n_heads * v_head_dim)
+  std::optional<QTensor> _so = std::nullopt;
+  std::optional<QTensor> _wq_b = std::nullopt; // (n_heads * head_dim, q_lora_rank)
+  std::optional<QTensor> _sq_b = std::nullopt;
+  std::optional<QTensor> _wkv_b = std::nullopt; // (n_heads * (head_dim-qk_rope_head_dim+v_head_dim), kv_lora_rank)
+  std::optional<QTensor> _skv_b = std::nullopt;
 
   // MHA kv cache
   f16_t* _key_cache = nullptr;   // (seq_len, n_heads * head_dim)
@@ -398,20 +387,14 @@ struct BlockMLA : public Block {
   );
   ~BlockMLA() override;
 
-  float* rms_q_a_weight() const { return _rms_q_a_weight; }
-  float* rms_kv_a_weight() const { return _rms_kv_a_weight; }
-  template <typename T>
-  T* wq_a() const { return static_cast<T*>(_wq_a); }
-  template <typename T>
-  T* wkv_a() const { return static_cast<T*>(_wkv_a); }
-  template <typename T>
-  T* wo() const { return static_cast<T*>(_wo); }
-  template <typename T>
-  T* wc() const { return static_cast<T*>(_wc); }
-  template <typename T>
-  T* wq_rope_b() const { return static_cast<T*>(_wq_rope_b); }
-  template <typename T>
-  T* wv_b() const { return static_cast<T*>(_wv_b); }
+  float* rms_q_a_weight() const { return _rms_q_a_weight ? static_cast<float*>(_rms_q_a_weight->data) : nullptr; }
+  float* rms_kv_a_weight() const { return _rms_kv_a_weight ? static_cast<float*>(_rms_kv_a_weight->data) : nullptr; }
+  std::optional<QTensor> wq_a() const { return _wq_a; }
+  std::optional<QTensor> wkv_a() const { return _wkv_a; }
+  std::optional<QTensor> wo() const { return _wo; }
+  std::optional<QTensor> wc() const { return _wc; }
+  std::optional<QTensor> wq_rope_b() const { return _wq_rope_b; }
+  std::optional<QTensor> wv_b() const { return _wv_b; }
   f16_t* kv_nope_cache() const { return _kv_nope_cache; }
   f16_t* kv_nope_cache(int pos) const { return _kv_nope_cache + pos * _config->kv_lora_rank; }
   f16_t* kv_rope_cache() const { return _kv_rope_cache; }
@@ -432,22 +415,22 @@ private:
   ) const;
 
   // weights for norms
-  float* _rms_q_a_weight = nullptr; // (q_lora_rank) rmsnorm weights
-  float* _rms_kv_a_weight = nullptr; // (kv_lora_rank + qk_rope_head_dim)
+  std::optional<QTensor> _rms_q_a_weight = std::nullopt; // (q_lora_rank) rmsnorm weights
+  std::optional<QTensor> _rms_kv_a_weight = std::nullopt; // (kv_lora_rank + qk_rope_head_dim)
 
   // weights for self-attention matmuls
-  void* _wq_a = nullptr; // (q_lora_rank, dim)
-  float* _sq_a = nullptr;
-  void* _wkv_a = nullptr; // (kv_lora_rank + qk_rope_head_dim, dim)
-  float* _skv_a = nullptr;
-  void* _wo = nullptr; // (dim, n_heads * v_head_dim)
-  float* _so = nullptr;
-  void* _wc = nullptr; // (n_heads * kv_lora_rank, q_lora_rank)
-  float* _sc = nullptr;
-  void* _wq_rope_b = nullptr; // (n_heads * qk_rope_head_dim, q_lora_rank)
-  float* _sq_rope_b = nullptr;
-  void* _wv_b = nullptr; // (n_heads * v_head_dim, kv_lora_rank)
-  float* _sv_b = nullptr;
+  std::optional<QTensor> _wq_a = std::nullopt; // (q_lora_rank, dim)
+  std::optional<QTensor> _sq_a = std::nullopt;
+  std::optional<QTensor> _wkv_a = std::nullopt; // (kv_lora_rank + qk_rope_head_dim, dim)
+  std::optional<QTensor> _skv_a = std::nullopt;
+  std::optional<QTensor> _wo = std::nullopt; // (dim, n_heads * v_head_dim)
+  std::optional<QTensor> _so = std::nullopt;
+  std::optional<QTensor> _wc = std::nullopt; // (n_heads * kv_lora_rank, q_lora_rank)
+  std::optional<QTensor> _sc = std::nullopt;
+  std::optional<QTensor> _wq_rope_b = std::nullopt; // (n_heads * qk_rope_head_dim, q_lora_rank)
+  std::optional<QTensor> _sq_rope_b = std::nullopt;
+  std::optional<QTensor> _wv_b = std::nullopt; // (n_heads, v_head_dim, kv_lora_rank)
+  std::optional<QTensor> _sv_b = std::nullopt;
 
   // MLA kv cache
   f16_t* _kv_nope_cache = nullptr; // (seq_len, kv_lora_rank)
@@ -460,13 +443,13 @@ struct Model {
   std::vector<std::shared_ptr<Block>> blocks;
   
   // token embedding table
-  void* token_embedding_table = nullptr; // (vocab_size, dim)
-  float* token_embedding_scale = nullptr; // (ceil(vocab_size / block_size[0]), ceil(dim / block_size[1]))
+  std::optional<QTensor> token_embedding_table = std::nullopt; // (vocab_size, dim)
+  std::optional<QTensor> token_embedding_scale = std::nullopt; // (ceil(vocab_size / block_size[0]), ceil(dim / block_size[1]))
   // final norm
-  float* rms_final_weight = nullptr; // (dim,)
+  std::optional<QTensor> rms_final_weight = std::nullopt; // (dim,)
   // classifier weights for the logits, on the last layer
-  void* wcls = nullptr; // (vocab_size, dim)
-  float* scls = nullptr;
+  std::optional<QTensor> wcls = std::nullopt; // (vocab_size, dim)
+  std::optional<QTensor> scls = std::nullopt;
 
   Model(YALMData& yalm, int context = 0);
   
@@ -523,9 +506,7 @@ void mha_cpu(
   int head_dim, int v_head_dim, int kv_len, int max_seq_len, int n_heads
 );
 
-void matmul_unscaled(float* xout, float* x, float* w, int n, int d);
-void matmul_unscaled(float* xout, float* x, f16_t* w, int n, int d);
-void matmul_unscaled(float* xout, float* x, f8e5m2_t* w, int n, int d);
+void matmul_unscaled(float* xout, float* x, const QTensor& w);
 
 void ffn_cpu(
   float* xout, float* x, 
