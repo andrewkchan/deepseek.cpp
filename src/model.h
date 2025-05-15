@@ -200,6 +200,7 @@ struct Block {
   std::optional<QTensor> w2() const { return _w2; }
   std::optional<QTensor> w3() const { return _w3; }
   std::optional<QTensor> moegate() const { return _moegate; }
+  std::optional<QTensor> moegate_bias() const { return _moegate_bias; }
   std::optional<QTensor> shared_w1() const { return _shared_w1; }
   std::optional<QTensor> shared_w2() const { return _shared_w2; }
   std::optional<QTensor> shared_w3() const { return _shared_w3; }
