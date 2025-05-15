@@ -445,7 +445,7 @@ inline float sigmoid(float x) {
 
 static void moe_gate(
   float* moe_weights,
-  float* moegate_bias,
+  std::optional<QTensor> moegate_bias,
   int* active_experts,
   float* x,
   int n_routed_experts,
@@ -468,8 +468,9 @@ static void moe_gate(
   }
 
   if (moegate_bias) {
+    float* bias_data = static_cast<float*>(moegate_bias->data);
     for (int i = 0; i < n_routed_experts; ++i) {
-      x[i] += moegate_bias[i];
+      x[i] += bias_data[i];
     }
   }
 
@@ -798,7 +799,7 @@ void Block::_block_cpu(
     // Block is a sparse MoE FFN layer
     PROFILE(matmul_unscaled(s.moe_weights(), s.xb(), *moegate()));
     moe_gate(
-      s.active_experts_weights(), static_cast<float*>(_moegate_bias->data), s.active_experts(), s.moe_weights(),
+      s.active_experts_weights(), moegate_bias(), s.active_experts(), s.moe_weights(),
       c.n_routed_experts, c.n_active_routed, c.norm_topk_prob, c.routed_scaling_factor,
       c.scoring_func, c.topk_method, c.n_group, c.topk_group
     );
