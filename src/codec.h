@@ -114,6 +114,9 @@ struct QTensor {
   QTensor(Quant quant, std::array<int, 4> shape, void* data, size_t size) : quant(quant), shape(shape), data(data), size(size) {}
   QTensor(const QTensor& other) = default;
   static QTensor from_codec_tensor(const Tensor& tensor, Quant weight_quant, std::array<int, 4> shape, const int debug_line);
+
+  size_t ndim() const;
+  size_t n_elements() const;
 };
 
 struct YALMData {

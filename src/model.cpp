@@ -119,58 +119,6 @@ void Config::from_yalm(YALMData& yalm, int context) {
   }
 }
 
-double Config::active_bytes(size_t pos) const {
-  double bytes_per_weight = bits_per_weight(weight_quant, block_size[0] * block_size[1]) / 8.0;
-
-  double bytes_per_block = 0;
-  bytes_per_block += 2 * dim * sizeof(float); // rms_att_weight, rms_ffn_weight
-  bytes_per_block += (kv_lora_rank + qk_rope_head_dim) * sizeof(float); // rms_kv_a_weight
-  if (q_lora_rank > 0) {
-    bytes_per_block += q_lora_rank * dim * bytes_per_weight; // wq_a
-    if (use_mla) {
-      bytes_per_block += n_heads * kv_lora_rank * q_lora_rank * bytes_per_weight; // wc
-      bytes_per_block += n_heads * qk_rope_head_dim * q_lora_rank * bytes_per_weight; // wq_rope_b
-    } else {
-      bytes_per_block += n_heads * head_dim * q_lora_rank * bytes_per_weight; // wq_b
-    }
-  } else {
-    bytes_per_block += n_heads * head_dim * dim * bytes_per_weight; // wq
-  }
-  bytes_per_block += (kv_lora_rank + qk_rope_head_dim) * dim * bytes_per_weight; // wkv_a
-  if (use_mla) {
-    bytes_per_block += n_heads * v_head_dim * kv_lora_rank * bytes_per_weight; // wv_b
-  } else {
-    bytes_per_block += n_heads * (head_dim-qk_rope_head_dim+v_head_dim) * kv_lora_rank * bytes_per_weight; // wkv_b
-  }
-  bytes_per_block += dim * n_heads * v_head_dim * bytes_per_weight; // wo
-  if (n_routed_experts > 0) {
-    bytes_per_block += n_routed_experts * dim * sizeof(float); // moegate
-    bytes_per_block += n_routed_experts * sizeof(float); // moegate_bias
-    bytes_per_block += n_active_routed * 3 * dim * moe_intermediate_size * bytes_per_weight; // w1, w2, w3
-  } else {
-    bytes_per_block += 3 * dim * hidden_dim * bytes_per_weight; // w1, w2, w3
-  }
-  if (n_shared_experts > 0) {
-    bytes_per_block += n_shared_experts * dim * moe_intermediate_size * bytes_per_weight; // shared_w1, shared_w2, shared_w3
-  }
-  size_t kv_len = std::min(static_cast<size_t>(max_seq_len), pos + 1);
-  size_t kv_entry_size = sizeof(f16_t);
-  if (use_mla) {
-    bytes_per_block += kv_len * kv_lora_rank * kv_entry_size; // kv_nope_cache
-    bytes_per_block += kv_len * qk_rope_head_dim * kv_entry_size; // kv_rope_cache
-  } else {
-    bytes_per_block += 2 * kv_len * n_heads * head_dim * kv_entry_size; // key_cache, value_cache
-  }
-
-  double bytes = 0;
-  bytes += dim * bytes_per_weight; // 1 row of token_embedding_table
-  bytes += n_layers * bytes_per_block; // blocks
-  bytes += dim * sizeof(float); // rms_final_weight
-  bytes += vocab_size * dim * sizeof(float); // wcls
-
-  return bytes;
-}
-
 std::optional<QTensor> check_tensor(const Tensor* tensor, Quant weight_quant, std::array<int, 4> shape, const int debug_line) {
   if (tensor == nullptr) {
     std::cerr << "FATAL: missing tensor at line " << debug_line << std::endl;
@@ -366,7 +314,35 @@ void Block::block(
   }
 }
 
+double Block::active_bytes(size_t pos) const {
+  double bytes_per_weight = bits_per_weight(_config->weight_quant, _config->block_size[0] * _config->block_size[1]) / 8.0;
 
+  double bytes = 0;
+  bytes += _rms_att_weight->size;
+  bytes += _rms_ffn_weight->size;
+  if (_config->n_routed_experts > 0 && _w1->ndim() == 3) {
+    bytes += _moegate->size; // moegate
+    bytes += _moegate_bias->size; // moegate_bias
+    // bytes_per_weight accounts for scales and other quantization schemes
+    bytes += _config->n_active_routed * 3 * _config->dim * _config->moe_intermediate_size * bytes_per_weight; // w1, w2, w3
+  } else {
+    bytes += _w1->size + _w2->size + _w3->size; // w1, w2, w3
+    if (_s1) {
+      bytes += _s1->size;
+      bytes += _s2->size;
+      bytes += _s3->size;
+    }
+  }
+  if (_config->n_shared_experts > 0) {
+    bytes += _shared_w1->size + _shared_w2->size + _shared_w3->size; // shared_w1, shared_w2, shared_w3
+    if (_shared_s1) {
+      bytes += _shared_s1->size;
+      bytes += _shared_s2->size;
+      bytes += _shared_s3->size;
+    }
+  }
+  return bytes;
+}
 
 BlockMHA::BlockMHA(
   int layer_i,
@@ -482,6 +458,29 @@ BlockMHA::~BlockMHA() {
     delete[] _key_cache;
     delete[] _value_cache;
   }
+}
+
+double BlockMHA::active_bytes(size_t pos) const {
+  double bytes = Block::active_bytes(pos);
+  
+  // Add active bytes for attention and KV cache
+  if (_wq) bytes += _wq->size;
+  if (_sq) bytes += _sq->size;
+  if (_wq_a) bytes += _wq_a->size;
+  if (_sq_a) bytes += _sq_a->size;
+  if (_wkv_a) bytes += _wkv_a->size;
+  if (_skv_a) bytes += _skv_a->size;
+  if (_wo) bytes += _wo->size;
+  if (_so) bytes += _so->size;
+  if (_wq_b) bytes += _wq_b->size;
+  if (_sq_b) bytes += _sq_b->size;
+  if (_wkv_b) bytes += _wkv_b->size;
+  if (_skv_b) bytes += _skv_b->size;
+  
+  size_t kv_len = std::min(static_cast<size_t>(_config->max_seq_len), pos + 1);
+  size_t kv_entry_size = sizeof(f16_t);
+  bytes += 2 * kv_len * _config->n_heads * _config->head_dim * kv_entry_size; // key_cache, value_cache
+  return bytes;
 }
 
 void BlockMHA::attention_impl(
@@ -618,6 +617,30 @@ BlockMLA::~BlockMLA() {
     delete[] _kv_nope_cache;
     delete[] _kv_rope_cache;
   }
+}
+
+double BlockMLA::active_bytes(size_t pos) const {
+  double bytes = Block::active_bytes(pos);
+
+  bytes += _rms_q_a_weight->size;
+  bytes += _rms_kv_a_weight->size;
+  if (_wq_a) bytes += _wq_a->size;
+  if (_sq_a) bytes += _sq_a->size;
+  if (_wkv_a) bytes += _wkv_a->size;
+  if (_skv_a) bytes += _skv_a->size;
+  if (_wo) bytes += _wo->size;
+  if (_so) bytes += _so->size;
+  if (_wc) bytes += _wc->size;
+  if (_sc) bytes += _sc->size;
+  if (_wq_rope_b) bytes += _wq_rope_b->size;
+  if (_sq_rope_b) bytes += _sq_rope_b->size;
+  if (_wv_b) bytes += _wv_b->size;
+  if (_sv_b) bytes += _sv_b->size;
+  size_t kv_len = std::min(static_cast<size_t>(_config->max_seq_len), pos + 1);
+  size_t kv_entry_size = sizeof(f16_t);
+  bytes += kv_len * _config->kv_lora_rank * kv_entry_size; // kv_nope_cache
+  bytes += kv_len * _config->qk_rope_head_dim * kv_entry_size; // kv_rope_cache
+  return bytes;
 }
 
 void BlockMLA::attention_impl(
@@ -845,6 +868,24 @@ void Model::forward(InferenceState& s, int token, int pos, InferenceMode mode) {
   if (_device == Device::CPU) {
     _forward_cpu(s, token, pos, mode);
   }
+}
+
+double Model::active_bytes(size_t pos) const {
+  double bytes_per_weight = bits_per_weight(config->weight_quant, config->block_size[0] * config->block_size[1]) / 8.0;
+
+  double bytes = 0;
+  bytes += config->dim * bytes_per_weight; // 1 row of token_embedding_table
+  // blocks
+  for (auto& block : blocks) {
+    bytes += block->active_bytes(pos);
+  }
+  bytes += rms_final_weight->size;
+  bytes += wcls->size;
+  if (scls) {
+    bytes += scls->size;
+  }
+
+  return bytes;
 }
 
 #if DEBUG_MODEL

@@ -248,8 +248,8 @@ void run_completion(
   Sampler& sampler = session.sampler;
   Tokenizer& tokenizer = session.tokenizer;
 
-  std::cout << "Model active bytes with full context window: " << model.config->active_bytes(model.config->max_seq_len) << std::endl;
-  std::cout << "Model active bytes with no context: " << model.config->active_bytes(0) << std::endl;
+  std::cout << "Model active bytes with full context window: " << model.active_bytes(model.config->max_seq_len) << std::endl;
+  std::cout << "Model active bytes with no context: " << model.active_bytes(0) << std::endl;
 
   if (num_steps == 0) {
     // `-n 0` means use the full context length
@@ -292,7 +292,7 @@ void run_completion(
     InferenceMode inferMode = pos + 1 == encoding.size() ? 
       InferenceMode::OUTPUT_LOGITS : InferenceMode::HYDRATE_KV_CACHE;
     model.forward(state, token_id, pos, inferMode);
-    read_bytes += model.config->active_bytes(pos);
+    read_bytes += model.active_bytes(pos);
   }
   uint64_t end_hydrate_ms = get_timestamp_ms();
   // For N steps:
@@ -308,7 +308,7 @@ void run_completion(
     }
     ProfileScope scope(fmt::format("fwd_pos_{:03d}_decode", encoding.size() - 1));
     model.forward(state, token_id, encoding.size() - 1);
-    read_bytes += model.config->active_bytes(encoding.size() - 1);
+    read_bytes += model.active_bytes(encoding.size() - 1);
   }
   std::cout << "\n" << std::endl;
   uint64_t end_ms = get_timestamp_ms();
@@ -346,7 +346,7 @@ void run_perplexity(
   Sampler& sampler = session.sampler;
   Tokenizer& tokenizer = session.tokenizer;
 
-  std::cout << "Model active bytes with full context window: " << model.config->active_bytes(model.config->max_seq_len) << std::endl;
+  std::cout << "Model active bytes with full context window: " << model.active_bytes(model.config->max_seq_len) << std::endl;
 
   {
     ProfileDisabledScope profile_disabled;
@@ -386,7 +386,7 @@ void run_perplexity(
     
     int token_id = encoding[pos];
     model.forward(state, token_id, pos);
-    read_bytes += model.config->active_bytes(pos);
+    read_bytes += model.active_bytes(pos);
 
     double logprob = std::log(sampler.sample_prob(encoding[pos + 1], state));
     sum_logprob += logprob;
@@ -427,7 +427,7 @@ void run_passkey(
   Sampler& sampler = session.sampler;
   Tokenizer& tokenizer = session.tokenizer;
 
-  std::cout << "Model active bytes with full context window: " << model.config->active_bytes(model.config->max_seq_len) << std::endl;
+  std::cout << "Model active bytes with full context window: " << model.active_bytes(model.config->max_seq_len) << std::endl;
 
   const std::string PROMPT_PREFIX = 
     "There is an important info hidden inside a lot of irrelevant text. "

@@ -233,6 +233,25 @@ QTensor QTensor::from_codec_tensor(const Tensor& tensor, Quant weight_quant, std
   return qtensor;
 }
 
+size_t QTensor::ndim() const {
+  for (size_t i = 0; i < shape.size(); i++) {
+    if (shape[i] == 0) {
+      return i;
+    }
+  }
+  return shape.size();
+}
+
+size_t QTensor::n_elements() const {
+  size_t numel = 1;
+  for (size_t i = 0; i < shape.size(); i++) {
+    if (shape[i] > 0) {
+      numel *= shape[i];
+    }
+  }
+  return numel;
+}
+
 YALMData::YALMData(const std::string& dirname, bool lock_model_weights) {
   if (from_directory(dirname, lock_model_weights) != 0) {
     std::cerr << "failed to load YALMData from directory" << std::endl;

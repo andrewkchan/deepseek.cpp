@@ -86,7 +86,6 @@ struct Config {
 
   // If nonzero `context` is supplied, max sequence length is limited to `context`.
   void from_yalm(YALMData& yalm, int context = 0);
-  double active_bytes(size_t pos) const;
 };
 
 // Buffer for all state used during a forward pass.
@@ -217,6 +216,8 @@ struct Block {
     int kv_len          // number of tokens in the kv cache that we will attend over
   ) const;
 
+  virtual double active_bytes(size_t pos) const;
+
 protected:
   virtual void attention_impl(
     InferenceState& s,  // inference state
@@ -313,6 +314,8 @@ struct BlockMHA : public Block {
   f16_t* value_cache() const { return _value_cache; }
   f16_t* value_cache(int pos) const { return _value_cache + pos * _config->v_head_dim * _config->n_heads; }
 
+  double active_bytes(size_t pos) const override;
+
 protected:
   void attention_impl(
     InferenceState& s, int pos, int kv_sink, int kv_pos, int kv_len
@@ -401,6 +404,8 @@ struct BlockMLA : public Block {
   f16_t* kv_rope_cache() const { return _kv_rope_cache; }
   f16_t* kv_rope_cache(int pos) const { return _kv_rope_cache + pos * _config->qk_rope_head_dim; }
 
+  double active_bytes(size_t pos) const override;
+
 protected:
   void attention_impl(
     InferenceState& s, int pos, int kv_sink, int kv_pos, int kv_len
@@ -456,6 +461,7 @@ struct Model {
   
   void forward(InferenceState& s, int token, int pos, InferenceMode mode = InferenceMode::OUTPUT_LOGITS);
 
+  double active_bytes(size_t pos) const;
 private:
   void _forward_cpu(InferenceState& s, int token, int pos, InferenceMode mode);
   void _copy_embedding(InferenceState& s, int token);
