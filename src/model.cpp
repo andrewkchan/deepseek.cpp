@@ -321,8 +321,8 @@ double Block::active_bytes(size_t pos) const {
   bytes += _rms_att_weight->size;
   bytes += _rms_ffn_weight->size;
   if (_config->n_routed_experts > 0 && _w1->ndim() == 3) {
-    bytes += _moegate->size; // moegate
-    bytes += _moegate_bias->size; // moegate_bias
+    bytes += _moegate->size;
+    bytes += _moegate_bias->size;
     // bytes_per_weight accounts for scales and other quantization schemes
     bytes += _config->n_active_routed * 3 * _config->dim * _config->moe_intermediate_size * bytes_per_weight; // w1, w2, w3
   } else {
@@ -334,12 +334,12 @@ double Block::active_bytes(size_t pos) const {
     }
   }
   if (_config->n_shared_experts > 0) {
-    bytes += _shared_w1->size + _shared_w2->size + _shared_w3->size; // shared_w1, shared_w2, shared_w3
-    if (_shared_s1) {
-      bytes += _shared_s1->size;
-      bytes += _shared_s2->size;
-      bytes += _shared_s3->size;
-    }
+    if (_shared_w1) bytes += _shared_w1->size;
+    if (_shared_s1) bytes += _shared_s1->size;
+    if (_shared_w2) bytes += _shared_w2->size;
+    if (_shared_s2) bytes += _shared_s2->size;
+    if (_shared_w3) bytes += _shared_w3->size;
+    if (_shared_s3) bytes += _shared_s3->size;
   }
   return bytes;
 }

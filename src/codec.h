@@ -108,7 +108,7 @@ struct QTensor {
   Quant quant = Quant::F32;
   std::array<int, 4> shape = {0, 0, 0, 0};
   void* data = nullptr; // not managed by QTensor
-  size_t size = 0; // size in bytes (number of elements * element size)
+  size_t size = 0; // size in bytes
 
   QTensor() = default;
   QTensor(Quant quant, std::array<int, 4> shape, void* data, size_t size) : quant(quant), shape(shape), data(data), size(size) {}
