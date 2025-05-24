@@ -322,7 +322,7 @@ double Block::active_bytes(size_t pos) const {
   bytes += _rms_ffn_weight->size;
   if (_config->n_routed_experts > 0 && _w1->ndim() == 3) {
     bytes += _moegate->size;
-    bytes += _moegate_bias->size;
+    if (_moegate_bias) bytes += _moegate_bias->size;
     // bytes_per_weight accounts for scales and other quantization schemes
     bytes += _config->n_active_routed * 3 * _config->dim * _config->moe_intermediate_size * bytes_per_weight; // w1, w2, w3
   } else {
