@@ -221,6 +221,7 @@ struct PerplexityArgs {
     int has_prompt = prompt.size() > 0 ? 1 : 0;
     int has_prompt_path = prompt_path.size() > 0 ? 1 : 0;
     if ((has_prompt + has_prompt_path) != 1) {
+      std::cerr << "Error: must provide exactly one nonempty -i <input prompt> or -f <input filepath>" << std::endl;
       return false;
     } else if (has_prompt_path) {
       std::ifstream file(prompt_path);
