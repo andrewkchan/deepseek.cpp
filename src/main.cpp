@@ -346,6 +346,7 @@ void run_perplexity(
   InferenceState& state = session.state;
   Sampler& sampler = session.sampler;
   Tokenizer& tokenizer = session.tokenizer;
+  (void)tokenizer;
 
   std::cout << "Model active bytes with full context window: " << model.active_bytes(model.config->max_seq_len) << std::endl;
 
@@ -358,22 +359,9 @@ void run_perplexity(
     std::cout << "Warmup complete" << std::endl;
   }
 
-  std::vector<int> encoding;
-  {
-    uint64_t encode_start_ms = get_timestamp_ms();
-    encoding = tokenizer.encode(prompt, true);
-    uint64_t encode_end_ms = get_timestamp_ms();
-
-    std::cout << tokenizer.encoding_to_debug_string(encoding) << std::endl;
-    uint64_t encoding_ms = encode_end_ms - encode_start_ms;
-    std::cout << fmt::format(
-      "Encoding stats: ({} tokens, throughput: {:.5}tok/s, latency: {:.5}s/tok, total: {:.5}s)\n",
-      encoding.size(),
-      encoding.size() / (encoding_ms / 1000.0),
-      (encoding_ms / 1000.0) / encoding.size(),
-      encoding_ms / 1000.0
-    ) << std::endl;
-  }
+  std::vector<int> encoding = {
+    #include "wikitest.cat.1chunk.v2-lite-encoded.txt"
+  };
 
   double sum_logprob = 0.0;
   double ss_logprob = 0.0;
