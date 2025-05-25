@@ -44,7 +44,7 @@ SUPPORTED_QUANTS = {
 }
 
 class Metadata:
-  def __init__(self, config, quant, n_layers, use_mla):
+  def __init__(self, config, tokenizer_config, quant, n_layers, use_mla):
     arch = config["architectures"][0]
     if arch not in SUPPORTED_ARCHITECTURES:
       raise Exception(f"Architecture {arch} is not supported, must be one of {SUPPORTED_ARCHITECTURES}")
@@ -61,7 +61,7 @@ class Metadata:
         self.n_layers = n_layers
       self.n_heads = config["num_attention_heads"]
       self.vocab_size = config["vocab_size"]
-      self.max_seq_len = config["max_position_embeddings"]
+      self.max_seq_len = tokenizer_config["model_max_length"]
       self.bos_token_id = config["bos_token_id"]
       self.eos_token_id = config["eos_token_id"]
       self.rope_theta = config.get("rope_theta", 10000.0)
@@ -537,6 +537,10 @@ if __name__ == "__main__":
     if not os.path.exists(args.tokenizer):
       argp.error(f"tokenizer.json not found in {args.input}")
     
+    args.tokenizer_config = os.path.join(args.input, "tokenizer_config.json")
+    if not os.path.exists(args.tokenizer_config):
+      argp.error(f"tokenizer_config.json not found in {args.input}")
+    
     files = os.listdir(args.input)
     args.models = [os.path.join(args.input, fname) for fname in files if os.path.splitext(fname)[1] == ".safetensors"]
     if len(args.models) == 0:
@@ -544,9 +548,11 @@ if __name__ == "__main__":
   else:
     argp.error("argument input is required")
 
+  with open(args.tokenizer_config, "r") as f:
+    tokenizer_config = json.load(f)
   with open(args.config, "r") as f:
     config = json.load(f)
-    metadata = Metadata(config, args.quant, args.n_layers, args.mla)
+  metadata = Metadata(config, tokenizer_config,args.quant, args.n_layers, args.mla)
 
   tokens = load_tokens(args.tokenizer, metadata.vocab_size)
   

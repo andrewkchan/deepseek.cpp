@@ -66,10 +66,9 @@ void Config::from_yalm(YALMData& yalm, int context) {
   v_head_dim = yalm.metadata.contains("v_head_dim") ? std::stoi(yalm.metadata.at("v_head_dim").get<std::string>()) : 0;
   head_dim = qk_nope_head_dim + qk_rope_head_dim;
 
-  // for now limit seq_len to 4096 to avoid KV cache OOM for models like Mistral since window size isn't correctly specified
-  max_seq_len = std::min(std::stoi(yalm.metadata.at("max_seq_len").get<std::string>()), 4096);
+  max_seq_len = std::stoi(yalm.metadata.at("max_seq_len").get<std::string>());
   if (context) {
-    max_seq_len = context;
+    max_seq_len = std::min(max_seq_len, context);
   }
 
   rope_theta = std::stof(yalm.metadata.at("rope_theta").get<std::string>());
