@@ -487,6 +487,7 @@ struct DebugTensor {
   DataType data_type;
 };
 std::map<std::string, DebugTensor>& debug_map_cpu();
+void dump_debug_map(const std::string& filename);
 #endif
 
 ////////////////////////////////////////

@@ -26,7 +26,7 @@ template <typename T>
 static void save_debug_tensor(const std::string& name, T* x, size_t size) {
   _debug_map[name] = DebugTensor(copy_debug_tensor<T>(x, size));
 }
-static void dump_debug_map(const std::string& filename) {
+void dump_debug_map(const std::string& filename) {
   std::ofstream out(filename);
   if (!out.is_open()) {
     fprintf(stderr, "Failed to open %s for writing\n", filename.c_str());
