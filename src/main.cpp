@@ -609,6 +609,12 @@ int main(int argc, char* argv[]) {
           error_usage();
         }
         i += 2;
+      } else if (args[i][1] == 'T') {
+        if (i + 1 >= args.size()) {
+          error_usage();
+        }
+        context = std::stoi(args[i + 1]);
+        i += 2;
       } else {
         next_args.push_back(args[i]);
         i += 1;
