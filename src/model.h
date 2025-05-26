@@ -83,6 +83,13 @@ struct Config {
   // If weights are quantized but block size is (0, 0), then we are using
   // per-tensor quantization.
   std::array<int, 2> block_size = {0, 0};
+  // RoPE scaling
+  int rs_beta_fast;
+  int rs_beta_slow;
+  float rs_factor;
+  float rs_mscale;
+  float rs_mscale_all_dim;
+  int rs_original_max_position_embeddings;
 
   // If nonzero `context` is supplied, max sequence length is limited to `context`.
   void from_yalm(YALMData& yalm, int context = 0);

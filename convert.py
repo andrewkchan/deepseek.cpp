@@ -105,6 +105,16 @@ class Metadata:
       self.topk_method = config["topk_method"]
       if self.topk_method == "noaux_tc":
         self.topk_method = "group_limited_greedy" # TODO: support for Deepseek v3
+      
+      # rope
+      rope_scaling = config["rope_scaling"]
+      assert rope_scaling["type"] == "yarn"
+      self.rope_scaling_beta_fast = rope_scaling["beta_fast"]
+      self.rope_scaling_beta_slow = rope_scaling["beta_slow"]
+      self.rope_scaling_factor = rope_scaling["factor"]
+      self.rope_scaling_mscale = rope_scaling["mscale"]
+      self.rope_scaling_mscale_all_dim = rope_scaling["mscale_all_dim"]
+      self.rope_scaling_original_max_position_embeddings = rope_scaling["original_max_position_embeddings"]
   
   def to_dict(self):
     result = {}
@@ -146,6 +156,13 @@ class Metadata:
       result["scoring_func"] = str(self.scoring_func)
       result["topk_group"] = str(self.topk_group)
       result["topk_method"] = str(self.topk_method)
+      # rope scaling
+      result["rope_scaling_beta_fast"] = str(self.rope_scaling_beta_fast)
+      result["rope_scaling_beta_slow"] = str(self.rope_scaling_beta_slow)
+      result["rope_scaling_factor"] = str(self.rope_scaling_factor)
+      result["rope_scaling_mscale"] = str(self.rope_scaling_mscale)
+      result["rope_scaling_mscale_all_dim"] = str(self.rope_scaling_mscale_all_dim)
+      result["rope_scaling_original_max_position_embeddings"] = str(self.rope_scaling_original_max_position_embeddings)
     return result
 
 # this is a horrible gpt-2 unicode byte encoder hack from https://github.com/openai/gpt-2/blob/master/src/encoder.py#L9
