@@ -1271,9 +1271,10 @@ void Model::_forward_cpu(InferenceState& s, int token, int pos, InferenceMode mo
   // When decoding past the context length, keep the first few tokens in the KV cache
   // untouched as "attention sinks" while replacing the rest in ring order.
   // See StreamingLLM (https://arxiv.org/pdf/2309.17453) for more.
-  int kv_sink = pos >= c.max_seq_len ? KV_SINKS : 0;
-  int kv_pos = kv_sink + (pos - kv_sink) % (c.max_seq_len - kv_sink);
-  int kv_len = pos >= c.max_seq_len ? c.max_seq_len : pos + 1;
+  int original_max_position = c.rs_original_max_position_embeddings;
+  int kv_sink = pos >= original_max_position ? KV_SINKS : 0;
+  int kv_pos = kv_sink + (pos - kv_sink) % (original_max_position - kv_sink);
+  int kv_len = pos >= original_max_position ? original_max_position : pos + 1;
 
   // forward all layers in order
   for (auto b : blocks) {
