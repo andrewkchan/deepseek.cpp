@@ -8,6 +8,7 @@
 #include "profile.h"
 
 #if DEBUG_MODEL
+#include "json.hpp"
 #include <fstream>
 #include "fmt/format.h"
 static std::map<std::string, DebugTensor> _debug_map;
@@ -67,6 +68,52 @@ void dump_debug_map(const std::string& filename) {
   }
   
   out << "\n}\n";
+  out.close();
+}
+void dump_debug_map_as_safetensors(const std::string& filename) {
+  std::ofstream out(filename, std::ios::binary);
+  if (!out.is_open()) {
+    fprintf(stderr, "Failed to open %s for writing\n", filename.c_str());
+    return;
+  }
+
+  json header;
+  size_t offset = 0;
+  for (auto& [key, val] : _debug_map) {
+    size_t offset_end = offset;
+    CodecDType dtype = val.data_type == DebugTensor::DataType::F32 ? CodecDType::F32 : CodecDType::F16;
+    if (dtype == CodecDType::F32) {
+      offset_end += val.data_f32.size() * sizeof(float);
+      header[key] = {
+        {"dtype", codec_dtype_to_string(dtype)},
+        {"shape", {val.data_f32.size()}},
+        {"data_offsets", {offset, offset_end}}
+      };
+    } else {
+      offset_end += val.data_f16.size() * sizeof(f16_t);
+      header[key] = {
+        {"dtype", codec_dtype_to_string(dtype)},
+        {"shape", {val.data_f16.size()}},
+        {"data_offsets", {offset, offset_end}}
+      };
+    }
+    offset = offset_end;
+  }
+  header["__metadata__"] = {{"debug", ""}};
+  std::string header_str = header.dump();
+  // 1. write uint64 (size of json header)
+  uint64_t header_len = static_cast<uint64_t>(header_str.size());
+  out.write(reinterpret_cast<const char*>(&header_len), sizeof(header_len));
+  // 2. write json header
+  out.write(header_str.c_str(), header_len);
+  // 3. write tensor data
+  for (auto& [key, val] : _debug_map) {
+    if (val.data_type == DebugTensor::DataType::F32) {
+      out.write(reinterpret_cast<const char*>(val.data_f32.data()), val.data_f32.size() * sizeof(float));
+    } else {
+      out.write(reinterpret_cast<const char*>(val.data_f16.data()), val.data_f16.size() * sizeof(f16_t));
+    }
+  }
   out.close();
 }
 #endif
