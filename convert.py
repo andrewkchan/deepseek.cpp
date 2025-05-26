@@ -44,7 +44,7 @@ SUPPORTED_QUANTS = {
 }
 
 class Metadata:
-  def __init__(self, config, tokenizer_config, quant, n_layers, use_mla):
+  def __init__(self, config, tokenizer_config, quant, n_layers, use_mla, bsize):
     arch = config["architectures"][0]
     if arch not in SUPPORTED_ARCHITECTURES:
       raise Exception(f"Architecture {arch} is not supported, must be one of {SUPPORTED_ARCHITECTURES}")
@@ -53,6 +53,10 @@ class Metadata:
     if quant not in SUPPORTED_QUANTS:
       raise Exception(f"Quantization {quant} is not supported, must be one of {SUPPORTED_QUANTS}")
     self.quant: Quant = SUPPORTED_QUANTS[quant]
+    if isinstance(self.quant, BlockQuant):
+      is_bsize_configurable = self.quant.block_size is not None
+      if is_bsize_configurable and bsize is not None:
+        self.quant.block_size = (bsize, bsize)
     if arch in ["DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM"]:
       self.dim = config["hidden_size"]
       self.hidden_dim = config["intermediate_size"]
@@ -534,6 +538,7 @@ if __name__ == "__main__":
   argp.add_argument("input", type=str, nargs="?")
   argp.add_argument("--mla", action="store_true")
   argp.add_argument("--quant", type=str, default="fp16", choices=SUPPORTED_QUANTS)
+  argp.add_argument("--bsize", type=int, default=None, help="block size for blockwise quantization")
   argp.add_argument("--n-layers", type=int, default=None, help="number of layers to convert (if None, convert all)")
   args = argp.parse_args()
 
@@ -569,7 +574,7 @@ if __name__ == "__main__":
     tokenizer_config = json.load(f)
   with open(args.config, "r") as f:
     config = json.load(f)
-  metadata = Metadata(config, tokenizer_config,args.quant, args.n_layers, args.mla)
+  metadata = Metadata(config, tokenizer_config,args.quant, args.n_layers, args.mla, args.bsize)
 
   tokens = load_tokens(args.tokenizer, metadata.vocab_size)
   
