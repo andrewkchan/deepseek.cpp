@@ -116,6 +116,14 @@ void Config::from_yalm(YALMData& yalm, int context) {
     block_size[0] = std::stoi(yalm.metadata.at("quantization_block_size_0").get<std::string>());
     block_size[1] = std::stoi(yalm.metadata.at("quantization_block_size_1").get<std::string>());
   }
+
+  // RoPE scaling
+  rs_beta_fast = std::stoi(yalm.metadata.at("rope_scaling_beta_fast").get<std::string>());
+  rs_beta_slow = std::stoi(yalm.metadata.at("rope_scaling_beta_slow").get<std::string>());
+  rs_factor = std::stof(yalm.metadata.at("rope_scaling_factor").get<std::string>());
+  rs_mscale = std::stof(yalm.metadata.at("rope_scaling_mscale").get<std::string>());
+  rs_mscale_all_dim = std::stof(yalm.metadata.at("rope_scaling_mscale_all_dim").get<std::string>());
+  rs_original_max_position_embeddings = std::stoi(yalm.metadata.at("rope_scaling_original_max_position_embeddings").get<std::string>());
 }
 
 std::optional<QTensor> check_tensor(const Tensor* tensor, Quant weight_quant, std::array<int, 4> shape, const int debug_line) {
