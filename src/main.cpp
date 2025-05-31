@@ -350,8 +350,8 @@ void run_completion(
 #endif
 }
 
-std::vector<int> DEEPSEEK_V2_LITE_ENCODED_WIKITEXT = {
-  #include "wikitest.cat.1chunk.v2-lite-encoded.txt"
+std::vector<int> V2_ENCODED_WIKITEXT = {
+  #include "wikitest.cat.1chunk.v2-encoded.txt"
 };
 
 void run_perplexity(
@@ -564,7 +564,7 @@ void run_interactive(Session& session) {
       }
       std::vector<int> encoding;
       if (perplexity_args.use_wikitext) {
-        encoding = DEEPSEEK_V2_LITE_ENCODED_WIKITEXT;
+        encoding = V2_ENCODED_WIKITEXT;
       } else {
         encoding = encode_prompt(perplexity_args.prompt, session.tokenizer);
       }
@@ -652,7 +652,7 @@ int main(int argc, char* argv[]) {
     Session session(checkpoint_dir, lock_model_weights, context, get_timestamp_ms());
     std::vector<int> encoding;
     if (perplexity_args.use_wikitext) {
-      encoding = DEEPSEEK_V2_LITE_ENCODED_WIKITEXT;
+      encoding = V2_ENCODED_WIKITEXT;
     } else {
       encoding = encode_prompt(perplexity_args.prompt, session.tokenizer);
     }
