@@ -28,6 +28,7 @@ void error_usage() {
   fprintf(stderr, "  Choose one:\n");
   fprintf(stderr, "    -i <string> input prompt\n");
   fprintf(stderr, "    -f <filepath> input file with prompt\n");
+  fprintf(stderr, "    -w use wikitext as input\n");
   fprintf(stderr, "Completion mode options:\n");
   fprintf(stderr, "  -n <int>    number of steps to run for in completion mode, default 256. 0 = max_seq_len, -1 = infinite\n");
   fprintf(stderr, "  Choose one:\n");
@@ -53,6 +54,7 @@ void help_usage_interactive() {
   fprintf(stderr, "  Choose one:\n");
   fprintf(stderr, "    -i <string> input prompt\n");
   fprintf(stderr, "    -f <filepath> input file with prompt\n");
+  fprintf(stderr, "    -w use wikitext as input\n");
   fprintf(stderr, "Completion mode options:\n");
   fprintf(stderr, "  -n <int>    number of steps to run for in completion mode, default 256. 0 = max_seq_len, -1 = infinite\n");
   fprintf(stderr, "  Choose one:\n");
@@ -187,6 +189,7 @@ struct PasskeyArgs {
 
 struct PerplexityArgs {
   std::string prompt;
+  bool use_wikitext = false;
   // Returns true if args are valid, false otherwise
   bool parse_args(const std::vector<const char*>& args) {
     std::string prompt_path = "";
@@ -214,14 +217,18 @@ struct PerplexityArgs {
         }
         prompt_path = args[i + 1];
         i += 2;
+      } else if (args[i][1] == 'w') {
+        use_wikitext = true;
+        i += 1;
       } else {
         return false;
       }
     }
     int has_prompt = prompt.size() > 0 ? 1 : 0;
     int has_prompt_path = prompt_path.size() > 0 ? 1 : 0;
-    if ((has_prompt + has_prompt_path) != 1) {
-      std::cerr << "Error: must provide exactly one nonempty -i <input prompt> or -f <input filepath>" << std::endl;
+    int has_wikitext = use_wikitext ? 1 : 0;
+    if ((has_prompt + has_prompt_path + has_wikitext) != 1) {
+      std::cerr << "Error: must provide exactly one nonempty -i <input prompt> or -f <input filepath> or -w" << std::endl;
       return false;
     } else if (has_prompt_path) {
       std::ifstream file(prompt_path);
@@ -237,6 +244,26 @@ struct PerplexityArgs {
     return true;
   }
 };
+
+std::vector<int> encode_prompt(const std::string& prompt, Tokenizer& tokenizer) {
+  std::vector<int> encoding;
+  {
+    uint64_t encode_start_ms = get_timestamp_ms();
+    encoding = tokenizer.encode(prompt, true);
+    uint64_t encode_end_ms = get_timestamp_ms();
+
+    std::cout << tokenizer.encoding_to_debug_string(encoding) << std::endl;
+    uint64_t encoding_ms = encode_end_ms - encode_start_ms;
+    std::cout << fmt::format(
+      "Encoding stats: ({} tokens, throughput: {:.5}tok/s, latency: {:.5}s/tok, total: {:.5}s)\n",
+      encoding.size(),
+      encoding.size() / (encoding_ms / 1000.0),
+      (encoding_ms / 1000.0) / encoding.size(),
+      encoding_ms / 1000.0
+    ) << std::endl;
+  }
+  return encoding;
+}
 
 void run_completion(
   Session& session,
@@ -266,22 +293,7 @@ void run_completion(
     std::cout << "Warmup complete" << std::endl;
   }
 
-  std::vector<int> encoding;
-  {
-    uint64_t encode_start_ms = get_timestamp_ms();
-    encoding = tokenizer.encode(prompt, true);
-    uint64_t encode_end_ms = get_timestamp_ms();
-
-    std::cout << tokenizer.encoding_to_debug_string(encoding) << std::endl;
-    uint64_t encoding_ms = encode_end_ms - encode_start_ms;
-    std::cout << fmt::format(
-      "Encoding stats: ({} tokens, throughput: {:.5}tok/s, latency: {:.5}s/tok, total: {:.5}s)\n",
-      encoding.size(),
-      encoding.size() / (encoding_ms / 1000.0),
-      (encoding_ms / 1000.0) / encoding.size(),
-      encoding_ms / 1000.0
-    ) << std::endl;
-  }
+  std::vector<int> encoding = encode_prompt(prompt, tokenizer);
 
   uint64_t start_ms = get_timestamp_ms();
   size_t read_bytes = 0;
@@ -338,15 +350,17 @@ void run_completion(
 #endif
 }
 
+std::vector<int> DEEPSEEK_V2_LITE_ENCODED_WIKITEXT = {
+  #include "wikitest.cat.1chunk.v2-lite-encoded.txt"
+};
+
 void run_perplexity(
   Session& session,
-  const std::string& prompt
+  const std::vector<int>& encoding
 ) {
   Model& model = session.model;
   InferenceState& state = session.state;
   Sampler& sampler = session.sampler;
-  Tokenizer& tokenizer = session.tokenizer;
-  (void)tokenizer;
 
   std::cout << "Model active bytes with full context window: " << model.active_bytes(model.config->max_seq_len) << std::endl;
 
@@ -358,10 +372,6 @@ void run_perplexity(
     model.forward(state, 0, 0);
     std::cout << "Warmup complete" << std::endl;
   }
-
-  std::vector<int> encoding = {
-    #include "wikitest.cat.1chunk.v2-lite-encoded.txt"
-  };
 
   double sum_logprob = 0.0;
   double ss_logprob = 0.0;
@@ -552,7 +562,13 @@ void run_interactive(Session& session) {
         help_usage_interactive();
         continue;
       }
-      run_perplexity(session, perplexity_args.prompt);
+      std::vector<int> encoding;
+      if (perplexity_args.use_wikitext) {
+        encoding = DEEPSEEK_V2_LITE_ENCODED_WIKITEXT;
+      } else {
+        encoding = encode_prompt(perplexity_args.prompt, session.tokenizer);
+      }
+      run_perplexity(session, encoding);
     }
   }
 }
@@ -634,7 +650,13 @@ int main(int argc, char* argv[]) {
       error_usage();
     }
     Session session(checkpoint_dir, lock_model_weights, context, get_timestamp_ms());
-    run_perplexity(session, perplexity_args.prompt);
+    std::vector<int> encoding;
+    if (perplexity_args.use_wikitext) {
+      encoding = DEEPSEEK_V2_LITE_ENCODED_WIKITEXT;
+    } else {
+      encoding = encode_prompt(perplexity_args.prompt, session.tokenizer);
+    }
+    run_perplexity(session, encoding);
   } else if (mode == "interactive") {
     if (next_args.size() != 0) {
       error_usage();

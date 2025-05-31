@@ -62,6 +62,7 @@ Perplexity mode options:
   Choose one:
     -i <string> input prompt
     -f <filepath> input file with prompt
+    -w use wikitext as input
 Completion mode options:
   -n <int>    number of steps to run for in completion mode, default 256. 0 = max_seq_len, -1 = infinite
   Choose one:
