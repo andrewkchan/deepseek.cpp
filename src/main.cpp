@@ -354,6 +354,10 @@ std::vector<int> V2_ENCODED_WIKITEXT = {
   #include "wikitest.cat.1chunk.v2-encoded.txt"
 };
 
+std::vector<int> V3_ENCODED_WIKITEXT = {
+  #include "wikitest.cat.1chunk.v3-encoded.txt"
+};
+
 void run_perplexity(
   Session& session,
   const std::vector<int>& encoding
@@ -564,7 +568,11 @@ void run_interactive(Session& session) {
       }
       std::vector<int> encoding;
       if (perplexity_args.use_wikitext) {
-        encoding = V2_ENCODED_WIKITEXT;
+        if (session.model_data.metadata.at("arch").get<std::string>() == "DeepseekV3ForCausalLM") {
+          encoding = V3_ENCODED_WIKITEXT;
+        } else {
+          encoding = V2_ENCODED_WIKITEXT;
+        }
       } else {
         encoding = encode_prompt(perplexity_args.prompt, session.tokenizer);
       }
@@ -652,7 +660,11 @@ int main(int argc, char* argv[]) {
     Session session(checkpoint_dir, lock_model_weights, context, get_timestamp_ms());
     std::vector<int> encoding;
     if (perplexity_args.use_wikitext) {
-      encoding = V2_ENCODED_WIKITEXT;
+      if (session.model_data.metadata.at("arch").get<std::string>() == "DeepseekV3ForCausalLM") {
+        encoding = V3_ENCODED_WIKITEXT;
+      } else {
+        encoding = V2_ENCODED_WIKITEXT;
+      }
     } else {
       encoding = encode_prompt(perplexity_args.prompt, session.tokenizer);
     }
