@@ -645,16 +645,44 @@ inline float clip(float x, float v) {
   return x < -v ? -v : (x > v ? v : x);
 }
 
-static void rope(float* buf, float* vec, int d, int pos, float theta) {
+inline float yarn_find_correction_dim(int num_rotations, int dim, int base, int max_pos) {
+  return (dim * logf(max_pos / (num_rotations * 2 * M_PI))) / (2 * logf(base));
+}
+
+inline float yarn_linear_ramp(float min, float max, int i) {
+  float lin = (i - min) / (max - min);
+  return std::clamp(lin, 0.0f, 1.0f);
+}
+
+inline float yarn_get_mscale(float scale, float mscale) {
+  return scale <= 1.0f ? 1.0f : 0.1 * mscale * logf(scale) + 1.0f;
+}
+
+static void rope(
+  float* buf, float* vec, 
+  int d, int pos,
+  float theta, float scaling_factor, 
+  int beta_fast, int beta_slow,
+  float mscale, float mscale_all_dim, 
+  int original_max_pos
+) {
   // For some reason, DeepSeek-V2 was trained using rope output 
   // layout transposed compared to the input. This means we need a buffer
   // to hold intermediate results.
   assert(d % 2 == 0);
   for (int i = 0; i < d; i += 2) {
-    float freq = 1.0f / powf(theta, (float)i / (float)d);
-    float val = pos * freq;
-    float fcr = cosf(val);
-    float fci = sinf(val);
+    // TODO: cache these values
+    float freq_extra = 1.0f / powf(theta, (float)i / (float)d);
+    float freq_inter = freq_extra / scaling_factor;
+    float low = std::max(0.0f, floorf(yarn_find_correction_dim(beta_fast, d, theta, original_max_pos)));
+    float high = std::min(d - 1.0f, floorf(yarn_find_correction_dim(beta_slow, d, theta, original_max_pos)));
+    float inv_freq_mask = 1.0f - yarn_linear_ramp(low, high, i / 2);
+    float inv_freq = freq_inter * (1.0f - inv_freq_mask) + freq_extra * inv_freq_mask;
+    float val = pos * inv_freq;
+    float _mscale = 
+      yarn_get_mscale(scaling_factor, mscale) / yarn_get_mscale(scaling_factor, mscale_all_dim);
+    float fcr = _mscale * cosf(val);
+    float fci = _mscale * sinf(val);
 
     float v0 = vec[i];
     float v1 = vec[i + 1];
@@ -680,16 +708,31 @@ static void rope_v3(float* vec, int d, int pos, float theta) {
   }
 }
 
-static void rope(float* buf, f16_t* vec, int d, int pos, float theta) {
+static void rope(
+  float* buf, f16_t* vec,
+  int d, int pos,
+  float theta, float scaling_factor, 
+  int beta_fast, int beta_slow,
+  float mscale, float mscale_all_dim, 
+  int original_max_pos
+) {
   // For some reason, DeepSeek-V2 was trained using rope output
   // layout transposed compared to the input. This means we need a buffer
   // to hold intermediate results.
   assert(d % 2 == 0);
   for (int i = 0; i < d; i += 2) {
-    float freq = 1.0f / powf(theta, (float)i / (float)d);
-    float val = pos * freq;
-    float fcr = cosf(val);
-    float fci = sinf(val);
+    // TODO: cache these values
+    float freq_extra = 1.0f / powf(theta, (float)i / (float)d);
+    float freq_inter = freq_extra / scaling_factor;
+    float low = std::max(0.0f, floorf(yarn_find_correction_dim(beta_fast, d, theta, original_max_pos)));
+    float high = std::min(d - 1.0f, floorf(yarn_find_correction_dim(beta_slow, d, theta, original_max_pos)));
+    float inv_freq_mask = 1.0f - yarn_linear_ramp(low, high, i / 2);
+    float inv_freq = freq_inter * (1.0f - inv_freq_mask) + freq_extra * inv_freq_mask;
+    float val = pos * inv_freq;
+    float _mscale = 
+      yarn_get_mscale(scaling_factor, mscale) / yarn_get_mscale(scaling_factor, mscale_all_dim);
+    float fcr = _mscale * cosf(val);
+    float fci = _mscale * sinf(val);
 
     float v0 = half_to_float(vec[i]);
     float v1 = half_to_float(vec[i + 1]);
@@ -952,7 +995,14 @@ void BlockMHA::_attention_impl(
     if (is_v3) {
       rope_v3(s.q(h) + q_pe_offset, c.qk_rope_head_dim, pos, c.rope_theta);
     } else {
-      rope(s.ropebuf(), s.q(h) + q_pe_offset, c.qk_rope_head_dim, pos, c.rope_theta);
+      rope(
+        s.ropebuf(), s.q(h) + q_pe_offset, 
+        c.qk_rope_head_dim, pos, 
+        c.rope_theta, c.rs_factor,
+        c.rs_beta_fast, c.rs_beta_slow,
+        c.rs_mscale, c.rs_mscale_all_dim,
+        c.rs_original_max_pos
+      );
     }
   }
   int kv_pe_offset = c.kv_lora_rank;
@@ -960,7 +1010,14 @@ void BlockMHA::_attention_impl(
   if (is_v3) {
     rope_v3(k_rope, c.qk_rope_head_dim, pos, c.rope_theta);
   } else {
-    rope(s.ropebuf(), k_rope, c.qk_rope_head_dim, pos, c.rope_theta);
+    rope(
+      s.ropebuf(), k_rope, 
+      c.qk_rope_head_dim, pos, 
+      c.rope_theta, c.rs_factor,
+      c.rs_beta_fast, c.rs_beta_slow,
+      c.rs_mscale, c.rs_mscale_all_dim,
+      c.rs_original_max_pos
+    );
   }
   // rms norm to non-pe chunk of kv_a
   rmsnorm(s.kv_a(), s.kv_a(), this->rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
@@ -1006,7 +1063,14 @@ void BlockMHA::_attention_impl(
       if (is_v3) {
         rope_v3(kh + q_pe_offset, c.qk_rope_head_dim, 1, c.rope_theta);
       } else {
-        rope(s.ropebuf(), kh + q_pe_offset, c.qk_rope_head_dim, 1, c.rope_theta);
+        rope(
+          s.ropebuf(), kh + q_pe_offset, 
+          c.qk_rope_head_dim, 1, 
+          c.rope_theta, c.rs_factor,
+          c.rs_beta_fast, c.rs_beta_slow,
+          c.rs_mscale, c.rs_mscale_all_dim,
+          c.rs_original_max_pos
+        );
       }
     }
   }
@@ -1067,7 +1131,14 @@ void BlockMLA::_attention_impl(
     if (is_v3) {
       rope_v3(s.q_rope(h), c.qk_rope_head_dim, pos, c.rope_theta);
     } else {
-      rope(s.ropebuf(), s.q_rope(h), c.qk_rope_head_dim, pos, c.rope_theta);
+      rope(
+        s.ropebuf(), s.q_rope(h), 
+        c.qk_rope_head_dim, pos, 
+        c.rope_theta, c.rs_factor,
+        c.rs_beta_fast, c.rs_beta_slow,
+        c.rs_mscale, c.rs_mscale_all_dim,
+        c.rs_original_max_pos
+      );
     }
   }
   int kv_pe_offset = c.kv_lora_rank;
@@ -1075,7 +1146,14 @@ void BlockMLA::_attention_impl(
   if (is_v3) {
     rope_v3(k_rope, c.qk_rope_head_dim, pos, c.rope_theta);
   } else {
-    rope(s.ropebuf(), k_rope, c.qk_rope_head_dim, pos, c.rope_theta);
+    rope(
+      s.ropebuf(), k_rope, 
+      c.qk_rope_head_dim, pos, 
+      c.rope_theta, c.rs_factor,
+      c.rs_beta_fast, c.rs_beta_slow,
+      c.rs_mscale, c.rs_mscale_all_dim,
+      c.rs_original_max_pos
+    );
   }
   // rms norm to non-pe chunk of kv_a (compressed latent kv)
   rmsnorm(s.kv_a(), s.kv_a(), this->rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
@@ -1097,7 +1175,14 @@ void BlockMLA::_attention_impl(
     if (is_v3) {
       rope_v3(kv, c.qk_rope_head_dim, 1, c.rope_theta);
     } else {
-      rope(s.ropebuf(), kv, c.qk_rope_head_dim, 1, c.rope_theta);
+      rope(
+        s.ropebuf(), kv, 
+        c.qk_rope_head_dim, 1, 
+        c.rope_theta, c.rs_factor,
+        c.rs_beta_fast, c.rs_beta_slow,
+        c.rs_mscale, c.rs_mscale_all_dim,
+        c.rs_original_max_pos
+      );
     }
   }
 
@@ -1263,7 +1348,7 @@ void Model::_forward_cpu(InferenceState& s, int token, int pos, InferenceMode mo
   // When decoding past the context length, keep the first few tokens in the KV cache
   // untouched as "attention sinks" while replacing the rest in ring order.
   // See StreamingLLM (https://arxiv.org/pdf/2309.17453) for more.
-  int original_max_position = c.rs_original_max_position_embeddings;
+  int original_max_position = c.rs_original_max_pos;
   int kv_sink = pos >= original_max_position ? KV_SINKS : 0;
   int kv_pos = kv_sink + (pos - kv_sink) % (original_max_position - kv_sink);
   int kv_len = pos >= original_max_position ? original_max_position : pos + 1;

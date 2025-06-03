@@ -89,7 +89,7 @@ struct Config {
   float rs_factor;
   float rs_mscale;
   float rs_mscale_all_dim;
-  int rs_original_max_position_embeddings;
+  int rs_original_max_pos;
 
   // If nonzero `context` is supplied, max sequence length is limited to `context`.
   void from_yalm(YALMData& yalm, int context = 0);
