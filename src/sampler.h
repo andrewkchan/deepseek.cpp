@@ -16,5 +16,5 @@ struct Sampler {
   // Return the index of the maximum value in `logits`.
   int sample_argmax(const InferenceState& s);
   // Sample from the model's distribution with temperature.
-  int sample(const InferenceState& s, float temperature = 1.0);
+  int sample(const InferenceState& s, float temperature = 1.0, float top_p = 0.95);
 };

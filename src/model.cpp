@@ -700,6 +700,10 @@ InferenceState::InferenceState(const std::shared_ptr<Config> config):
   _v = new float[config->n_heads * config->v_head_dim]();
   _att = new float[config->n_heads * config->max_seq_len]();
   _logits = new float[config->vocab_size]();
+  _logit_indices = new int[config->vocab_size]();
+  for (int i = 0; i < config->vocab_size; i++){
+    _logit_indices[i] = i;
+  }
   if (config->use_mla) {
     _q_c = new float[config->n_heads * config->kv_lora_rank]();
     _q_rope = new float[config->n_heads * config->qk_rope_head_dim]();
@@ -739,6 +743,7 @@ InferenceState::~InferenceState() {
     delete[] _v;
     delete[] _att;
     delete[] _logits;
+    delete[] _logit_indices;
     if (_moe_weights != nullptr) {
       delete[] _moe_weights;
       delete[] _active_experts;

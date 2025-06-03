@@ -34,6 +34,7 @@ void error_usage() {
   fprintf(stderr, "  Choose one:\n");
   fprintf(stderr, "    -i <string> input prompt\n");
   fprintf(stderr, "    -t <float> temperature (default - 1.0)\n");
+  fprintf(stderr, "    -p <float> p for top-p sampling (default - 0.95)\n");
   fprintf(stderr, "    -f <filepath> input file with prompt\n");
   fprintf(stderr, "Passkey mode options:\n");
   fprintf(stderr, "  -n <int>    number of junk lines to insert (default - 250)\n");
@@ -60,6 +61,7 @@ void help_usage_interactive() {
   fprintf(stderr, "  Choose one:\n");
   fprintf(stderr, "    -i <string> input prompt\n");
   fprintf(stderr, "    -t <float> temperature (default - 1.0)\n");
+  fprintf(stderr, "    -p <float> p for top-p sampling (default - 0.95)\n");
   fprintf(stderr, "    -f <filepath> input file with prompt\n");
   fprintf(stderr, "Passkey mode options:\n");
   fprintf(stderr, "  -n <int>    number of junk lines to insert (default - 250)\n");
@@ -84,6 +86,7 @@ struct CompletionArgs {
   std::string prompt;
   int num_steps;
   float temperature = 1.0;
+  float top_p = 0.95;
   // Returns true if args are valid, false otherwise
   bool parse_args(const std::vector<const char*>& args) {
     std::string prompt_path = "";
@@ -110,6 +113,12 @@ struct CompletionArgs {
           return false;
         }
         temperature = std::stof(args[i + 1]);
+        i += 2;
+      } else if (args[i][1] == 'p') {
+        if (i + 1 >= args.size()) {
+          return false;
+        }
+        top_p = std::stof(args[i + 1]);
         i += 2;
       } else if (args[i][1] == 'f') {
         if (i + 1 >= args.size()) {
@@ -269,7 +278,8 @@ void run_completion(
   Session& session,
   const std::string& prompt,
   int num_steps,
-  float temperature
+  float temperature,
+  float top_p
 ) {
   Model& model = session.model;
   InferenceState& state = session.state;
@@ -312,7 +322,7 @@ void run_completion(
   // - Sample + decode output logits
   // - Forward the model
   for (int i = 0; i < num_steps || num_steps == -1; i++) {
-    int token_id = sampler.sample(state, temperature);
+    int token_id = sampler.sample(state, temperature, top_p);
     std::string token_str = tokenizer.decode_one(encoding.back(), token_id);
     std::cout << token_str << std::flush;
     encoding.push_back(token_id);
@@ -552,7 +562,7 @@ void run_interactive(Session& session) {
         help_usage_interactive();
         continue;
       }
-      run_completion(session, completion_args.prompt, completion_args.num_steps, completion_args.temperature);
+      run_completion(session, completion_args.prompt, completion_args.num_steps, completion_args.temperature, completion_args.top_p);
     } else if (mode == "passkey") {
       PasskeyArgs passkey_args;
       if (!passkey_args.parse_args(args)) {
@@ -644,7 +654,7 @@ int main(int argc, char* argv[]) {
       error_usage();
     }
     Session session(checkpoint_dir, lock_model_weights, context, get_timestamp_ms());
-    run_completion(session, completion_args.prompt, completion_args.num_steps, completion_args.temperature);
+    run_completion(session, completion_args.prompt, completion_args.num_steps, completion_args.temperature, completion_args.top_p);
   } else if (mode == "passkey") {
     PasskeyArgs passkey_args;
     if (!passkey_args.parse_args(next_args)) {

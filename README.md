@@ -68,6 +68,7 @@ Completion mode options:
   Choose one:
     -i <string> input prompt
     -t <float> temperature (default - 1.0)
+    -p <float> p for top-p sampling (default - 0.95)
     -f <filepath> input file with prompt
 Passkey mode options:
   -n <int>    number of junk lines to insert (default - 250)

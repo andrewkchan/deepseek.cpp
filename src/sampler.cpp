@@ -1,5 +1,6 @@
 #include "sampler.h"
 
+#include <algorithm>
 #include <cfloat>
 #include <cstdlib>
 
@@ -37,11 +38,12 @@ int Sampler::sample_argmax(const InferenceState& s) {
   return argmax;
 }
 
-int Sampler::sample(const InferenceState& s, float temperature) {
+int Sampler::sample(const InferenceState& s, float temperature, float top_p) {
   if (temperature == 0.0) {
     return sample_argmax(s);
   }
   const float* logits = s.logits();
+  int* logit_indices = s.logit_indices();
   // Find max value to moderate the logits later on for numerical stability
   float max_val = -FLT_MAX;
   for (int i = 0; i < vocab_size; ++i) {
@@ -53,7 +55,15 @@ int Sampler::sample(const InferenceState& s, float temperature) {
   for (int i = 0; i < vocab_size; ++i) {
     sum += expf((logits[i] - max_val) / temperature);
   }
-  float r = std::rand() / (float)RAND_MAX;
+  // Sort logits descending for nucleus/top-p sampling (https://arxiv.org/abs/1904.09751)
+  if (top_p < 1.0) {
+    std::sort(
+      logit_indices, logit_indices + vocab_size, 
+      [&logits](int i, int j) { return logits[i] > logits[j]; }
+    );
+  }
+  // Randomly sample from the softmaxed logits distribution
+  float r = std::rand() / (float)RAND_MAX * top_p;
   float cumsum = 0;
   for (int i = 0; i < vocab_size; ++i) {
     cumsum += expf((logits[i] - max_val) / temperature) / sum;
