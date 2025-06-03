@@ -645,14 +645,13 @@ inline float clip(float x, float v) {
   return x < -v ? -v : (x > v ? v : x);
 }
 
-static void rope(float* buf, float* vec, int d, int head_dim, int pos, float theta) {
+static void rope(float* buf, float* vec, int d, int pos, float theta) {
   // For some reason, DeepSeek-V2 was trained using rope output 
   // layout transposed compared to the input. This means we need a buffer
   // to hold intermediate results.
   assert(d % 2 == 0);
   for (int i = 0; i < d; i += 2) {
-    int j_head = i % head_dim;
-    float freq = 1.0f / powf(theta, (float)j_head / (float)head_dim);
+    float freq = 1.0f / powf(theta, (float)i / (float)d);
     float val = pos * freq;
     float fcr = cosf(val);
     float fci = sinf(val);
@@ -667,12 +666,9 @@ static void rope(float* buf, float* vec, int d, int head_dim, int pos, float the
   }
 }
 
-static void rope_v3(float* vec, int d, int head_dim, int pos, float theta) {
-  int rotary_dim = head_dim;
-
+static void rope_v3(float* vec, int d, int pos, float theta) {
   for (int i = 0; i < d; i += 2) {
-    int j_head = i % head_dim;
-    float freq = j_head >= rotary_dim ? 0.f : 1.0f / powf(theta, (float)j_head / (float)rotary_dim);
+    float freq = 1.0f / powf(theta, (float)i / (float)d);
     float val = pos * freq;
     float fcr = cosf(val);
     float fci = sinf(val);
@@ -684,14 +680,13 @@ static void rope_v3(float* vec, int d, int head_dim, int pos, float theta) {
   }
 }
 
-static void rope(float* buf, f16_t* vec, int d, int head_dim, int pos, float theta) {
+static void rope(float* buf, f16_t* vec, int d, int pos, float theta) {
   // For some reason, DeepSeek-V2 was trained using rope output
   // layout transposed compared to the input. This means we need a buffer
   // to hold intermediate results.
   assert(d % 2 == 0);
   for (int i = 0; i < d; i += 2) {
-    int j_head = i % head_dim;
-    float freq = 1.0f / powf(theta, (float)j_head / (float)head_dim);
+    float freq = 1.0f / powf(theta, (float)i / (float)d);
     float val = pos * freq;
     float fcr = cosf(val);
     float fci = sinf(val);
@@ -706,12 +701,9 @@ static void rope(float* buf, f16_t* vec, int d, int head_dim, int pos, float the
   }
 }
 
-static void rope_v3(f16_t* vec, int d, int head_dim, int pos, float theta) {
-  int rotary_dim = head_dim;
-
+static void rope_v3(f16_t* vec, int d, int pos, float theta) {
   for (int i = 0; i < d; i += 2) {
-    int j_head = i % head_dim;
-    float freq = j_head >= rotary_dim ? 0.f : 1.0f / powf(theta, (float)j_head / (float)rotary_dim);
+    float freq = 1.0f / powf(theta, (float)i / (float)d);
     float val = pos * freq;
     float fcr = cosf(val);
     float fci = sinf(val);
@@ -958,17 +950,17 @@ void BlockMHA::_attention_impl(
   bool is_v3 = c.has_moegate_bias;
   for (int h = 0; h < c.n_heads; h++) {
     if (is_v3) {
-      rope_v3(s.q(h) + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+      rope_v3(s.q(h) + q_pe_offset, c.qk_rope_head_dim, pos, c.rope_theta);
     } else {
-      rope(s.ropebuf(), s.q(h) + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+      rope(s.ropebuf(), s.q(h) + q_pe_offset, c.qk_rope_head_dim, pos, c.rope_theta);
     }
   }
   int kv_pe_offset = c.kv_lora_rank;
   float* k_rope = s.kv_a() + kv_pe_offset;
   if (is_v3) {
-    rope_v3(k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+    rope_v3(k_rope, c.qk_rope_head_dim, pos, c.rope_theta);
   } else {
-    rope(s.ropebuf(), k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+    rope(s.ropebuf(), k_rope, c.qk_rope_head_dim, pos, c.rope_theta);
   }
   // rms norm to non-pe chunk of kv_a
   rmsnorm(s.kv_a(), s.kv_a(), this->rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
@@ -1012,9 +1004,9 @@ void BlockMHA::_attention_impl(
     for (int h = 0; h < c.n_heads; h++) {
       f16_t* kh = key + h * c.head_dim;
       if (is_v3) {
-        rope_v3(kh + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+        rope_v3(kh + q_pe_offset, c.qk_rope_head_dim, 1, c.rope_theta);
       } else {
-        rope(s.ropebuf(), kh + q_pe_offset, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+        rope(s.ropebuf(), kh + q_pe_offset, c.qk_rope_head_dim, 1, c.rope_theta);
       }
     }
   }
@@ -1073,17 +1065,17 @@ void BlockMLA::_attention_impl(
   bool is_v3 = c.has_moegate_bias;
   for (int h = 0; h < c.n_heads; h++) {
     if (is_v3) {
-      rope_v3(s.q_rope(h), c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+      rope_v3(s.q_rope(h), c.qk_rope_head_dim, pos, c.rope_theta);
     } else {
-      rope(s.ropebuf(), s.q_rope(h), c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+      rope(s.ropebuf(), s.q_rope(h), c.qk_rope_head_dim, pos, c.rope_theta);
     }
   }
   int kv_pe_offset = c.kv_lora_rank;
   float* k_rope = s.kv_a() + kv_pe_offset;
   if (is_v3) {
-    rope_v3(k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+    rope_v3(k_rope, c.qk_rope_head_dim, pos, c.rope_theta);
   } else {
-    rope(s.ropebuf(), k_rope, c.qk_rope_head_dim, c.qk_rope_head_dim, pos, c.rope_theta);
+    rope(s.ropebuf(), k_rope, c.qk_rope_head_dim, pos, c.rope_theta);
   }
   // rms norm to non-pe chunk of kv_a (compressed latent kv)
   rmsnorm(s.kv_a(), s.kv_a(), this->rms_kv_a_weight(), c.kv_lora_rank, c.norm_eps);
@@ -1103,9 +1095,9 @@ void BlockMLA::_attention_impl(
   for (int r = 0; r < kv_sink; r++) {
     f16_t* kv = this->kv_rope_cache(r);
     if (is_v3) {
-      rope_v3(kv, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+      rope_v3(kv, c.qk_rope_head_dim, 1, c.rope_theta);
     } else {
-      rope(s.ropebuf(), kv, c.qk_rope_head_dim, c.qk_rope_head_dim, 1, c.rope_theta);
+      rope(s.ropebuf(), kv, c.qk_rope_head_dim, 1, c.rope_theta);
     }
   }
 
