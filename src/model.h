@@ -135,6 +135,7 @@ struct InferenceState {
   int* active_experts() const { return _active_experts; }
   // LM head
   float* logits() const { return _logits; }
+  int* logit_indices() const { return _logit_indices; }
   // activation quantization buffer
   void* aqb() const { return _aqb; }
 
@@ -171,6 +172,7 @@ private:
   
   // LM head
   float* _logits = nullptr;    // (vocab_size,) - final output logits
+  int* _logit_indices = nullptr; // (vocab_size,) - logit indices (for use by top-p sampler)
 
   // activation quantization buffer
   uint8_t* _aqb = nullptr; // buffer for quantized activations
