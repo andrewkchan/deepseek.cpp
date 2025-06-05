@@ -650,6 +650,9 @@ inline float yarn_find_correction_dim(int num_rotations, int dim, int base, int 
 }
 
 inline float yarn_linear_ramp(float min, float max, int i) {
+  if (min == max) {
+    max += 0.001; // Prevent singularity
+  }
   float lin = (i - min) / (max - min);
   return std::clamp(lin, 0.0f, 1.0f);
 }
@@ -675,7 +678,7 @@ static void rope(
     float freq_extra = 1.0f / powf(theta, (float)i / (float)d);
     float freq_inter = freq_extra / scaling_factor;
     float low = std::max(0.0f, floorf(yarn_find_correction_dim(beta_fast, d, theta, original_max_pos)));
-    float high = std::min(d - 1.0f, floorf(yarn_find_correction_dim(beta_slow, d, theta, original_max_pos)));
+    float high = std::min(d - 1.0f, ceilf(yarn_find_correction_dim(beta_slow, d, theta, original_max_pos)));
     float inv_freq_mask = 1.0f - yarn_linear_ramp(low, high, i / 2);
     float inv_freq = freq_inter * (1.0f - inv_freq_mask) + freq_extra * inv_freq_mask;
     float val = pos * inv_freq;
@@ -725,7 +728,7 @@ static void rope(
     float freq_extra = 1.0f / powf(theta, (float)i / (float)d);
     float freq_inter = freq_extra / scaling_factor;
     float low = std::max(0.0f, floorf(yarn_find_correction_dim(beta_fast, d, theta, original_max_pos)));
-    float high = std::min(d - 1.0f, floorf(yarn_find_correction_dim(beta_slow, d, theta, original_max_pos)));
+    float high = std::min(d - 1.0f, ceilf(yarn_find_correction_dim(beta_slow, d, theta, original_max_pos)));
     float inv_freq_mask = 1.0f - yarn_linear_ramp(low, high, i / 2);
     float inv_freq = freq_inter * (1.0f - inv_freq_mask) + freq_extra * inv_freq_mask;
     float val = pos * inv_freq;
