@@ -123,7 +123,7 @@ void Config::from_yalm(YALMData& yalm, int context) {
   rs_factor = std::stof(yalm.metadata.at("rope_scaling_factor").get<std::string>());
   rs_mscale = std::stof(yalm.metadata.at("rope_scaling_mscale").get<std::string>());
   rs_mscale_all_dim = std::stof(yalm.metadata.at("rope_scaling_mscale_all_dim").get<std::string>());
-  rs_original_max_position_embeddings = std::stoi(yalm.metadata.at("rope_scaling_original_max_position_embeddings").get<std::string>());
+  rs_original_max_pos = std::stoi(yalm.metadata.at("rope_scaling_original_max_position_embeddings").get<std::string>());
 }
 
 std::optional<QTensor> check_tensor(const Tensor* tensor, Quant weight_quant, std::array<int, 4> shape, const int debug_line) {
