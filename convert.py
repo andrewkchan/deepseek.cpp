@@ -14,7 +14,7 @@ import torch
 
 from quantizer import k_quantize
 
-from typing import Tuple, List, Literal
+from typing import Tuple, List, Literal, Union
 import dataclasses
 
 SUPPORTED_ARCHITECTURES = [
@@ -25,7 +25,7 @@ SUPPORTED_ARCHITECTURES = [
 @dataclasses.dataclass
 class BlockQuant:
   name: Literal["fp32", "fp16", "f8e5m2"]
-  block_size: Tuple[int, int] | None
+  block_size: Union[Tuple[int, int], None]
   dtype: torch.dtype
 
 @dataclasses.dataclass
@@ -33,7 +33,7 @@ class KQuant:
   name: Literal["q2_k", "q3_k"]
   dtype: torch.dtype
 
-Quant = BlockQuant | KQuant
+Quant = Union[BlockQuant, KQuant]
 
 SUPPORTED_QUANTS = {
   "fp32": BlockQuant(name="fp32", block_size=None, dtype=torch.float32),
