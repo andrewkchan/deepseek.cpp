@@ -18,6 +18,7 @@ Quantizations other than FP32 require AVX2 and F16C support.
 | DeepSeek-V2 | ✅ | ✅ | WIP | ✅ | WIP | ✅ | WIP | ✅ |
 | DeepSeek-V2.5 | ✅ | ✅ | WIP | ✅ | WIP | ✅ | WIP | ✅ |
 | DeepSeek-V3 | ✅ | ✅ | WIP | ✅ | WIP | - | - | - |
+| DeepSeek-V3.1 (Terminus) | ✅ | ✅ | WIP | ✅ | WIP | - | - | - |
 | DeepSeek-R1 | ✅ | ✅ | WIP | ✅ | WIP | - | - | - |
 
 deepseek.cpp is missing important optimizations for production use (see notes below), but gets pretty close to llama.cpp in single-batch decode speed. Benchmarking DeepSeek-V3-Base with Q2_K quantization on an AWS r6a.12xlarge instance (AMD EPYC 7R13, 2x24 cores, 384GB DDR4 RAM):
